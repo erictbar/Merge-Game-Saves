@@ -43,9 +43,16 @@ You can configure Playnite to run this script automatically before and after lau
 
 4. Adjust the paths and parameters as needed for your setup.
 
+#### Example Playnite Script Settings
+
+![Example Playnite Script Settings](example_playnite.png)
+
+*Above: Playnite's script settings for a game, showing where to add the PowerShell command.*
+
 ## Parameters
 - `-Path` (required): Comma-separated list of save directories to merge.
 - `-Archive` (optional, recommended): Path to the folder where the merged save will be archived.
+
 
 ## Notes
 - Ensure network paths are accessible and you have the necessary permissions.
