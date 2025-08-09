@@ -3,7 +3,7 @@ param(
     [Parameter(Mandatory=$true)]
     [string[]]$Path,
     
-    [string]$Archive = "$env:USERPROFILE\OneDrive\Saves\Automation",
+    [string]$Archive = "$env:USERPROFILE\Documents\GameSaves\Archive",
     
     [switch]$DryRun,
     
