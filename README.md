@@ -38,7 +38,7 @@ You can configure Playnite to run this script automatically before and after lau
 3. Add the following command to the **Pre-Script** and/or **Post-Script** fields:
 
    ```powershell
-   pwsh.exe -ExecutionPolicy Bypass -File "C:\Path\To\MergeGames.ps1" -Path "\\<IP1>\c\Users\<User1>\AppData\Roaming\<Emulator>\nand\user\save\<UserID>\<GameID>","\\<IP2>\c\Users\<User2>\AppData\Roaming\<Emulator>\nand\user\save\<UserID>\<GameID>" -Archive "C:\Path\To\Archive\Folder"
+   pwsh.exe -ExecutionPolicy Bypass -File "C:\Path\To\MergeGames.ps1" -Path "\\<IP1>\<Location of Save Data>","\\<IP2>\<Location of Save Data>" -Archive "C:\Path\To\Archive\Folder"
    ```
 
 4. Adjust the paths and parameters as needed for your setup.
