@@ -45,7 +45,7 @@ You can configure Playnite to run this script automatically before and after lau
 
 ## Parameters
 - `-Path` (required): Comma-separated list of save directories to merge.
-- `-Archive` (optioal, recommended): Path to the folder where the merged save will be archived.
+- `-Archive` (optional, recommended): Path to the folder where the merged save will be archived.
 
 ## Notes
 - Ensure network paths are accessible and you have the necessary permissions.
