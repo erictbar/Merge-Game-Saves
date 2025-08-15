@@ -323,28 +323,11 @@ function Sync-Files {
     
     foreach ($relativePath in $allFiles.Keys) {
         $fileVersions = $allFiles[$relativePath]
-        
+        # Find the source file (newest or resolved)
         if ($fileVersions.Count -eq 1) {
-            # File exists in only one location - copy to all others
             $sourceFile = $fileVersions[0]
-            
-            for ($i = 0; $i -lt $Paths.Count; $i++) {
-                $targetPath = Join-Path $Paths[$i] $relativePath
-                
-                if ($sourceFile.FullPath -ne $targetPath) {
-                    $syncActions += @{
-                        Action = "Copy"
-                        Source = $sourceFile.FullPath
-                        Target = $targetPath
-                        RelativePath = $relativePath
-                        Reason = "File missing in target location"
-                    }
-                }
-            }
         } else {
-            # File exists in multiple locations - resolve conflicts
             $resolvedFile = $fileVersions[0]
-            
             for ($j = 1; $j -lt $fileVersions.Count; $j++) {
                 $resolvedFile = Resolve-FileConflict -File1 $resolvedFile -File2 $fileVersions[$j] -ConflictResolution $ConflictResolution
                 if (-not $resolvedFile) {
@@ -352,24 +335,38 @@ function Sync-Files {
                     break
                 }
             }
-            
-            if ($resolvedFile) {
-                # Copy resolved file to all locations where it differs
-                foreach ($fileVersion in $fileVersions) {
-                    if ($fileVersion.FullPath -ne $resolvedFile.FullPath) {
+            $sourceFile = $resolvedFile
+        }
+        # Copy to all locations where missing or outdated
+        for ($i = 0; $i -lt $Paths.Count; $i++) {
+            $targetPath = Join-Path $Paths[$i] $relativePath
+            $targetExists = $false
+            foreach ($fileVersion in $fileVersions) {
+                if ($fileVersion.FullPath -eq $targetPath) {
+                    $targetExists = $true
+                    # If not the resolved version, schedule update
+                    if ($fileVersion.FullPath -ne $sourceFile.FullPath) {
                         $syncActions += @{
                             Action = "Copy"
-                            Source = $resolvedFile.FullPath
-                            Target = $fileVersion.FullPath
+                            Source = $sourceFile.FullPath
+                            Target = $targetPath
                             RelativePath = $relativePath
                             Reason = "Updating with resolved version"
                         }
                     }
                 }
             }
+            if (-not $targetExists) {
+                $syncActions += @{
+                    Action = "Copy"
+                    Source = $sourceFile.FullPath
+                    Target = $targetPath
+                    RelativePath = $relativePath
+                    Reason = "File missing in target location (empty or new)"
+                }
+            }
         }
     }
-    
     return $syncActions
 }
 
