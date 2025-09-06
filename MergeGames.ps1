@@ -34,6 +34,25 @@ if ($Help) {
     exit 0
 }
 
+# Logging function (moved up so it's available for parameter-repair diagnostics)
+function Write-Log {
+    param(
+        [string]$Message,
+        [string]$Level = "INFO"
+    )
+    
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $logMessage = "[$timestamp] [$Level] $Message"
+    
+    switch ($Level) {
+        "ERROR" { Write-Host $logMessage -ForegroundColor Red }
+        "WARN" { Write-Host $logMessage -ForegroundColor Yellow }
+        "SUCCESS" { Write-Host $logMessage -ForegroundColor Green }
+        "DEBUG" { if ($ShowDetails) { Write-Host $logMessage -ForegroundColor Gray } }
+        default { Write-Host $logMessage }
+    }
+}
+
 # Repair common parameter-binding issues when the caller passes a comma-separated list
 # or when the shell binds extra path-like arguments to other parameters (e.g. ConflictResolution)
 function Is-PathLike([string]$s) {
@@ -67,24 +86,7 @@ if (Is-PathLike $ConflictResolution) {
 # Normalize and deduplicate Path entries
 $Path = $Path | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' } | Select-Object -Unique
 
-# Logging function
-function Write-Log {
-    param(
-        [string]$Message,
-        [string]$Level = "INFO"
-    )
-    
-    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    $logMessage = "[$timestamp] [$Level] $Message"
-    
-    switch ($Level) {
-        "ERROR" { Write-Host $logMessage -ForegroundColor Red }
-        "WARN" { Write-Host $logMessage -ForegroundColor Yellow }
-        "SUCCESS" { Write-Host $logMessage -ForegroundColor Green }
-        "DEBUG" { if ($ShowDetails) { Write-Host $logMessage -ForegroundColor Gray } }
-        default { Write-Host $logMessage }
-    }
-}
+# Write-Log is defined above for use during parameter-repair diagnostics
 
 # Function to test if a path is accessible
 function Test-PathAccess {
