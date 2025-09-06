@@ -2,15 +2,15 @@
 param(
     [Parameter(Mandatory=$true)]
     [string[]]$Path,
-    
+
     [string]$Archive = "$env:USERPROFILE\Documents\GameSaves\Archive",
-    
+
     [switch]$DryRun,
-    
+
     [switch]$ShowDetails,
-    
+
     [string]$ConflictResolution = "Newest", # Newest, Largest, Manual
-    
+
     [switch]$Help
 )
 
@@ -33,6 +33,39 @@ if ($Help) {
     Write-Host "  MergeGames.ps1 -Path '\\PC1\saves','\\PC2\saves' -DryRun -ShowDetails"
     exit 0
 }
+
+# Repair common parameter-binding issues when the caller passes a comma-separated list
+# or when the shell binds extra path-like arguments to other parameters (e.g. ConflictResolution)
+function Is-PathLike([string]$s) {
+    if (-not $s) { return $false }
+    return ($s -match '^(\\\\|[A-Za-z]:\\)')
+}
+
+# If caller passed a single string containing commas, split it into multiple paths
+if ($Path.Count -eq 1 -and $Path[0].Contains(',')) {
+    Write-Log "Detected comma-separated string in -Path parameter, splitting into multiple entries..." "DEBUG"
+    $Path = $Path[0] -split ',' | ForEach-Object { $_.Trim().Trim('"').Trim("'") }
+}
+
+# Collect any unbound args that look like paths
+if ($args.Count -gt 0) {
+    foreach ($a in $args) {
+        if (Is-PathLike $a) {
+            Write-Log "Found unbound path-like argument: $a -- adding to Path list" "DEBUG"
+            $Path += $a
+        }
+    }
+}
+
+# Sometimes shells bind additional path strings to the wrong named parameter (e.g. ConflictResolution)
+if (Is-PathLike $ConflictResolution) {
+    Write-Log "ConflictResolution looks like a path (was passed positionally). Moving it into -Path..." "DEBUG"
+    $Path += $ConflictResolution
+    $ConflictResolution = "Newest"
+}
+
+# Normalize and deduplicate Path entries
+$Path = $Path | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' } | Select-Object -Unique
 
 # Logging function
 function Write-Log {
@@ -59,7 +92,7 @@ function Test-PathAccess {
     
     try {
         # Fast network connectivity check for UNC paths
-        if ($Path -match '^\\\\([^\\]+)\\') {
+        if ($Path -match '^\\([^\\]+)\\') {
             $hostname = $matches[1]
             Write-Log "Testing network connectivity to $hostname..." "DEBUG"
             
@@ -77,13 +110,14 @@ function Test-PathAccess {
                 }
                 
                 if (-not $ping) {
-                    Write-Log "Network host $hostname is unreachable" "WARN"
-                    return $false
+                    # Many networks block ICMP/ping while SMB still works. Don't fail early on ping failure.
+                    Write-Log "Network host $hostname did not respond to ICMP/ping (may be blocked); will attempt filesystem access" "WARN"
+                } else {
+                    Write-Log "Network host $hostname is reachable via ICMP" "DEBUG"
                 }
-                Write-Log "Network host $hostname is reachable" "DEBUG"
             } catch {
-                Write-Log "Could not test connectivity to $hostname, assuming unreachable" "WARN"
-                return $false
+                # If the ping/check fails for any reason, don't assume the share is unreachable — try filesystem access below.
+                Write-Log "Could not test connectivity to $hostname (ping failed); will attempt filesystem access" "WARN"
             }
         }
         
@@ -168,7 +202,7 @@ function Get-FileHashQuick {
 }
 
 # Function to create backup
-function Create-Backup {
+function Backup-Inventory {
     param(
         [hashtable]$FileInventory,
         [string]$SourcePath,
@@ -212,8 +246,8 @@ function Create-Backup {
             $copiedCount++
         }
         
-        Write-Log "Created backup with $copiedCount files at: $backupDir" "SUCCESS"
-        return $backupDir
+    Write-Log "Created backup with $copiedCount files at: $backupDir" "SUCCESS"
+    return $backupDir
         
     } catch {
         Write-Log "Error creating backup: $($_.Exception.Message)" "ERROR"
@@ -371,7 +405,7 @@ function Sync-Files {
 }
 
 # Function to execute sync actions
-function Execute-SyncActions {
+function Invoke-SyncActions {
     param([hashtable[]]$SyncActions)
     
     if ($SyncActions.Count -eq 0) {
@@ -490,7 +524,7 @@ try {
     $backupPaths = @()
     for ($i = 0; $i -lt $accessiblePaths.Count; $i++) {
         if ($inventories[$i].Count -gt 0) {
-            $backupPath = Create-Backup -FileInventory $inventories[$i] -SourcePath $accessiblePaths[$i] -ArchivePath $Archive
+            $backupPath = Backup-Inventory -FileInventory $inventories[$i] -SourcePath $accessiblePaths[$i] -ArchivePath $Archive
             if ($backupPath) {
                 $backupPaths += $backupPath
             }
@@ -500,10 +534,10 @@ try {
     # Generate sync actions (only if we have multiple accessible paths)
     if ($accessiblePaths.Count -ge 2) {
         Write-Log "Analyzing differences and generating sync plan..." "INFO"
-        $syncActions = Sync-Files -Inventories $inventories -Paths $accessiblePaths
-        
-        # Execute sync actions
-        Execute-SyncActions -SyncActions $syncActions
+    $syncActions = Sync-Files -Inventories $inventories -Paths $accessiblePaths
+
+    # Execute sync actions
+    Invoke-SyncActions -SyncActions $syncActions
     } else {
         Write-Log "Skipping synchronization (only one accessible path). Backup created successfully." "WARN"
     }
