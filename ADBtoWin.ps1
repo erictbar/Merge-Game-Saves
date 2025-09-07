@@ -10,7 +10,11 @@ param(
     [string]$AdbExe = 'adb',
     [switch]$DryRun,
     [switch]$WhatIf,
-    [switch]$ShowDetails
+    [switch]$ShowDetails,
+    [int]$InitialWait = 0,                     # seconds to wait before starting ADB operations
+    [int]$MaxRetries = 3,                      # number of times to retry ADB operations
+    [int]$RetryDelay = 5,                      # seconds between retries
+    [int]$ConnectTimeout = 10                  # seconds to wait for device connection
 )
 
 function Write-Log {
@@ -43,6 +47,12 @@ if (-not (Test-Path $AdbExe -PathType Leaf)) {
 }
 
 Write-Log "Using adb executable: $AdbExe" "DEBUG"
+
+# Initial wait if specified (useful when running from Playnite after game start)
+if ($InitialWait -gt 0) {
+    Write-Log "Waiting $InitialWait seconds for system to stabilize..." "INFO"
+    Start-Sleep -Seconds $InitialWait
+}
 
 function Run-AdbRaw {
     param([string[]]$ArgArray)
@@ -107,27 +117,54 @@ Write-Log "Ensuring adb server is started" "DEBUG"
 $srv = Run-AdbRaw -ArgArray @('start-server')
 Write-Log "adb start-server exit $($srv.ExitCode). Output: $($srv.Output -join ' | ')" "DEBUG"
 
-# attempt auto-connect if needed
-if (-not (Device-Listed)) {
-    if ($AutoConnect) {
-        Write-Log "Device $Device not listed. Attempting adb connect $ConnectAddr" "INFO"
-    $conn = Run-AdbRaw -ArgArray @('connect', $ConnectAddr)
-        if (-not $conn.Success) {
-            Write-Log "adb connect failed (exit $($conn.ExitCode)). Output:`n$($conn.Output -join '`n')" "WARN"
-        } else {
-            Write-Log "adb connect output: $($conn.Output -join ' | ')" "DEBUG"
+# Enhanced device connection with retry logic
+function Wait-ForDevice {
+    param([int]$MaxAttempts = $MaxRetries, [int]$DelaySeconds = $RetryDelay)
+    
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        Write-Log "Checking for device (attempt $attempt/$MaxAttempts)..." "INFO"
+        
+        if (Device-Listed) {
+            Write-Log "Device $Device is available" "INFO"
+            return $true
         }
-        Start-Sleep -Seconds 1
+        
+        if ($AutoConnect) {
+            Write-Log "Device $Device not listed. Attempting adb connect $ConnectAddr" "INFO"
+            $conn = Run-AdbRaw -ArgArray @('connect', $ConnectAddr)
+            if (-not $conn.Success) {
+                Write-Log "adb connect failed (exit $($conn.ExitCode)). Output:`n$($conn.Output -join '`n')" "WARN"
+            } else {
+                Write-Log "adb connect output: $($conn.Output -join ' | ')" "DEBUG"
+            }
+            
+            # Wait a bit for connection to establish
+            Start-Sleep -Seconds 2
+            
+            # Check again after connect attempt
+            if (Device-Listed) {
+                Write-Log "Device $Device connected successfully" "INFO"
+                return $true
+            }
+        }
+        
+        if ($attempt -lt $MaxAttempts) {
+            Write-Log "Device not available. Waiting $DelaySeconds seconds before retry..." "WARN"
+            Start-Sleep -Seconds $DelaySeconds
+        }
+    }
+    
+    return $false
+}
+
+# attempt auto-connect if needed with retry logic
+if (-not (Wait-ForDevice)) {
+    if ($AutoConnect) {
+        Write-Log "Device still not available after $MaxRetries attempts. Aborting." "ERROR"
     } else {
         Write-Log "Device $Device not listed. Use -AutoConnect to attempt 'adb connect' or connect manually." "ERROR"
-        exit 2
     }
-
-    # re-check
-    if (-not (Device-Listed)) {
-        Write-Log "Device still not listed after connect attempt. Aborting." "ERROR"
-        exit 3
-    }
+    exit 2
 }
 
 # build timestamped folder for Pull or default for Push
@@ -139,6 +176,43 @@ if ($Action -eq 'Pull') {
 }
 
 Write-Log "Action: $Action, Device: $Device, RemotePath: $RemotePath, LocalBase: $LocalBase" "INFO"
+
+# Function to retry ADB operations with backoff
+function Invoke-AdbWithRetry {
+    param(
+        [string[]]$AdbArgs,
+        [string]$OperationName,
+        [int]$MaxAttempts = $MaxRetries
+    )
+    
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        Write-Log "$OperationName (attempt $attempt/$MaxAttempts)..." "INFO"
+        
+        $result = Run-Adb -ArgArray $AdbArgs
+        if ($result.Success) {
+            Write-Log "$OperationName successful" "SUCCESS"
+            return $result
+        }
+        
+        Write-Log "$OperationName failed (exit $($result.ExitCode)). Output:`n$($result.Output -join "`n")" "WARN"
+        
+        if ($attempt -lt $MaxAttempts) {
+            Write-Log "Retrying in $RetryDelay seconds..." "INFO"
+            Start-Sleep -Seconds $RetryDelay
+            
+            # Re-verify device is still connected before retry
+            if (-not (Device-Listed)) {
+                Write-Log "Device disconnected. Attempting to reconnect..." "WARN"
+                if (-not (Wait-ForDevice -MaxAttempts 2 -DelaySeconds 3)) {
+                    Write-Log "Could not reconnect to device for retry" "ERROR"
+                    return $result
+                }
+            }
+        }
+    }
+    
+    return $result
+}
 
 try {
     if ($Action -eq 'Pull') {
@@ -153,9 +227,9 @@ try {
         }
 
     Write-Log "Pulling from device:${Device}:${RemotePath} -> $dest" "INFO"
-    $result = Run-Adb -ArgArray @('pull', $RemotePath, $dest)
+    $result = Invoke-AdbWithRetry -AdbArgs @('pull', $RemotePath, $dest) -OperationName "Pull operation"
         if (-not $result.Success) {
-            Write-Log "adb pull failed (exit $($result.ExitCode)). Output:`n$($result.Output -join "`n")" "ERROR"
+            Write-Log "adb pull failed after $MaxRetries attempts (exit $($result.ExitCode)). Output:`n$($result.Output -join "`n")" "ERROR"
             exit 2
         }
         Write-Log "Pull successful. Files saved to: $dest" "SUCCESS"
@@ -177,9 +251,9 @@ try {
         }
 
     Write-Log "Pushing local folder $sourceFolder -> device:${Device}:${RemotePath}" "INFO"
-    $result = Run-Adb -ArgArray @('push', $sourceFolder, $RemotePath)
+    $result = Invoke-AdbWithRetry -AdbArgs @('push', $sourceFolder, $RemotePath) -OperationName "Push operation"
         if (-not $result.Success) {
-            Write-Log "adb push failed (exit $($result.ExitCode)). Output:`n$($result.Output -join "`n")" "ERROR"
+            Write-Log "adb push failed after $MaxRetries attempts (exit $($result.ExitCode)). Output:`n$($result.Output -join "`n")" "ERROR"
             exit 5
         }
         Write-Log "Push successful." "SUCCESS"
