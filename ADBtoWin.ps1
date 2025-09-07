@@ -58,21 +58,32 @@ function Run-AdbRaw {
     param([string[]]$ArgArray)
     # remove null/empty args to avoid calling 'adb' with no arguments (which prints help)
     $cleanArgs = @()
-    if ($ArgArray) { $cleanArgs = $ArgArray | Where-Object { $_ -ne $null -and $_ -ne '' } }
+    if ($ArgArray) { 
+        $cleanArgs = $ArgArray | Where-Object { $_ -ne $null -and $_ -ne '' -and $_.Trim() -ne '' }
+    }
     if (-not $cleanArgs -or $cleanArgs.Count -eq 0) {
         Write-Log "Run-AdbRaw called with no arguments, refusing to run adb with empty args" "DEBUG"
         return @{ Success = $false; ExitCode = 1; Output = @('No args supplied') }
     }
-    $cmdLine = "$AdbExe " + ($cleanArgs -join ' ')
+    
+    # Ensure proper argument separation and quoting
+    $cmdLine = "`"$AdbExe`" " + ($cleanArgs | ForEach-Object { if ($_ -match '\s') { "`"$_`"" } else { $_ } }) -join ' '
     Write-Log "Running: $cmdLine" "DEBUG"
+    
     if ($WhatIf) { Write-Log "[WhatIf] $cmdLine" "INFO"; return @{ Success=$true; Output=@("[WhatIf]") ; ExitCode=0 } }
     if ($DryRun) { Write-Log "[DryRun] $cmdLine" "INFO"; return @{ Success=$true; Output=@("[DryRun]") ; ExitCode=0 } }
 
-    # Execute using the call operator with an argument array to avoid quoting issues
-    Write-Log "Exec: $cmdLine" "DEBUG"
-    $output = & $AdbExe @cleanArgs 2>&1
-    $exit = $LASTEXITCODE
-    return @{ Success = ($exit -eq 0); ExitCode = $exit; Output = $output }
+    # Execute using the call operator with proper argument array
+    Write-Log "Exec: $AdbExe with args: [$($cleanArgs -join '], [')]" "DEBUG"
+    try {
+        $output = & $AdbExe $cleanArgs 2>&1
+        $exit = $LASTEXITCODE
+        Write-Log "ADB exit code: $exit" "DEBUG"
+        return @{ Success = ($exit -eq 0); ExitCode = $exit; Output = $output }
+    } catch {
+        Write-Log "Exception running ADB: $($_.Exception.Message)" "ERROR"
+        return @{ Success = $false; ExitCode = 1; Output = @($_.Exception.Message) }
+    }
 }
 
 function Run-Adb {
@@ -83,32 +94,40 @@ function Run-Adb {
 }
 
 function Device-Listed {
-    # returns $true if device string appears as "device" in adb devices output
+    # returns $true if device string appears as "device" OR "offline" in adb devices output
     $r = Run-AdbRaw -ArgArray @('devices')
     if (-not $r.Success -and -not $WhatIf -and -not $DryRun) {
-        # adb devices may still return 0 with list; treat non-success as possible failure but inspect output
         Write-Log "Warning: adb devices returned non-zero exit code $($r.ExitCode)" "DEBUG"
     }
     # dump output lines for debugging
     foreach ($o in $r.Output) { Write-Log "adb devices output: $o" "DEBUG" }
     foreach ($line in $r.Output) {
-        if ($line -match "^\s*([^\s]+)\s+device\s*$") {
+        # Accept both "device" and "offline" status for BlueStacks compatibility
+        if ($line -match "^\s*([^\s]+)\s+(device|offline)\s*$") {
             if ($matches[1] -eq $Device -or $matches[1] -eq $ConnectAddr -or $Device -like "$matches[1]*") {
+                if ($matches[2] -eq "offline") {
+                    Write-Log "Device $($matches[1]) found but offline - will attempt to use anyway (BlueStacks compatibility)" "WARN"
+                }
                 return $true
             }
         }
     }
-        # fallback: try 'adb devices -l' (some adb servers include extra lines; -l gives a more consistent list)
-        Write-Log "Falling back to 'adb devices -l'" "DEBUG"
-        $r2 = Run-AdbRaw -ArgArray @('devices','-l')
-        foreach ($o in $r2.Output) { Write-Log "adb devices -l output: $o" "DEBUG" }
-        foreach ($line in $r2.Output) {
-            if ($line -match "^\s*([^\s]+)\s+device\b") {
-                if ($matches[1] -eq $Device -or $matches[1] -eq $ConnectAddr -or $Device -like "$matches[1]*") {
-                    return $true
+    
+    # fallback: try 'adb devices -l' (some adb servers include extra lines; -l gives a more consistent list)
+    Write-Log "Falling back to 'adb devices -l'" "DEBUG"
+    $r2 = Run-AdbRaw -ArgArray @('devices','-l')
+    foreach ($o in $r2.Output) { Write-Log "adb devices -l output: $o" "DEBUG" }
+    foreach ($line in $r2.Output) {
+        # Accept both "device" and "offline" status
+        if ($line -match "^\s*([^\s]+)\s+(device|offline)\b") {
+            if ($matches[1] -eq $Device -or $matches[1] -eq $ConnectAddr -or $Device -like "$matches[1]*") {
+                if ($matches[2] -eq "offline") {
+                    Write-Log "Device $($matches[1]) found but offline - will attempt to use anyway (BlueStacks compatibility)" "WARN"
                 }
+                return $true
             }
         }
+    }
     return $false
 }
 
@@ -261,4 +280,69 @@ try {
 } catch {
     Write-Log "Unexpected error: $_" "ERROR"
     exit 99
+}
+
+param(
+    [string]$InstanceName = "",  # e.g., "Pie64", "Nougat32", etc. If empty, returns first running instance
+    [string]$ConfigPath = "C:\ProgramData\BlueStacks_nxt\bluestacks.conf",
+    [switch]$ShowAll
+)
+
+function Get-BlueStacksADBPorts {
+    param([string]$ConfigFile)
+    
+    if (-not (Test-Path $ConfigFile)) {
+        Write-Error "BlueStacks config not found at: $ConfigFile"
+        return @()
+    }
+    
+    $ports = @()
+    $content = Get-Content $ConfigFile
+    
+    foreach ($line in $content) {
+        # Match lines like: bst.instance.Pie64.status.adb_port="5556"
+        if ($line -match '^bst\.instance\.([^.]+)\.status\.adb_port="(\d+)"') {
+            $instanceName = $matches[1]
+            $port = $matches[2]
+            
+            $ports += [PSCustomObject]@{
+                Instance = $instanceName
+                Port = $port
+                Address = "127.0.0.1:$port"
+            }
+        }
+    }
+    
+    return $ports
+}
+
+try {
+    $ports = Get-BlueStacksADBPorts -ConfigFile $ConfigPath
+    
+    if ($ports.Count -eq 0) {
+        Write-Error "No BlueStacks ADB ports found in config file"
+        exit 1
+    }
+    
+    if ($ShowAll) {
+        Write-Host "All BlueStacks instances and their ADB ports:"
+        $ports | Format-Table -AutoSize
+        exit 0
+    }
+    
+    if ($InstanceName) {
+        $targetPort = $ports | Where-Object { $_.Instance -eq $InstanceName }
+        if (-not $targetPort) {
+            Write-Error "Instance '$InstanceName' not found. Available instances: $($ports.Instance -join ', ')"
+            exit 1
+        }
+        Write-Output $targetPort.Address
+    } else {
+        # Return first port (most commonly used)
+        Write-Output $ports[0].Address
+    }
+    
+} catch {
+    Write-Error "Error reading BlueStacks config: $($_.Exception.Message)"
+    exit 1
 }
