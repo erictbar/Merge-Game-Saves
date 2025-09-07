@@ -1,6 +1,6 @@
 # MergeGames.ps1 - Sync game save files across multiple PCs with backup
 param(
-    [Parameter(Mandatory=$true)]
+    [Parameter(Mandatory=$true, ValueFromRemainingArguments=$false)]
     [string[]]$Path,
 
     [string]$Archive = "$env:USERPROFILE\Documents\GameSaves\Archive",
@@ -11,7 +11,10 @@ param(
 
     [string]$ConflictResolution = "Newest", # Newest, Largest, Manual
 
-    [switch]$Help
+    [switch]$Help,
+    
+    [Parameter(ValueFromRemainingArguments=$true)]
+    [string[]]$RemainingArgs
 )
 
 # Show help if requested
@@ -55,36 +58,82 @@ function Write-Log {
 
 # Repair common parameter-binding issues when the caller passes a comma-separated list
 # or when the shell binds extra path-like arguments to other parameters (e.g. ConflictResolution)
-function Is-PathLike([string]$s) {
+function Test-IsPathLike([string]$s) {
     if (-not $s) { return $false }
     return ($s -match '^(\\\\|[A-Za-z]:\\)')
 }
 
-# If caller passed a single string containing commas, split it into multiple paths
-if ($Path.Count -eq 1 -and $Path[0].Contains(',')) {
-    Write-Log "Detected comma-separated string in -Path parameter, splitting into multiple entries..." "DEBUG"
-    $Path = $Path[0] -split ',' | ForEach-Object { $_.Trim().Trim('"').Trim("'") }
+# Handle parameter binding issues - collect all path-like arguments from various sources
+if ($ShowDetails) {
+    Write-Log "Initial parameter values:" "DEBUG"
+    Write-Log "  Path: $($Path -join '; ')" "DEBUG"
+    Write-Log "  RemainingArgs: $($RemainingArgs -join '; ')" "DEBUG"
+    Write-Log "  ConflictResolution: $ConflictResolution" "DEBUG"
+    Write-Log "  args: $($args -join '; ')" "DEBUG"
 }
 
-# Collect any unbound args that look like paths
-if ($args.Count -gt 0) {
-    foreach ($a in $args) {
-        if (Is-PathLike $a) {
-            Write-Log "Found unbound path-like argument: $a -- adding to Path list" "DEBUG"
-            $Path += $a
+# Reconstruct paths from fragmented parameters
+# PowerShell may split comma-separated paths across multiple parameters
+$reconstructedPaths = @()
+
+# Start with the first path
+if ($Path.Count -gt 0) {
+    $firstPath = $Path[0]
+    
+    # Check if ConflictResolution contains a path fragment that should be combined with the first path
+    if ($ConflictResolution -match "^['`"]?[A-Za-z]:\\") {
+        # ConflictResolution looks like it starts a new path
+        $reconstructedPaths += $firstPath
+        
+        # Extract the path from ConflictResolution (remove leading quote if present)
+        $secondPathStart = $ConflictResolution.TrimStart("'").TrimStart('"')
+        
+        # Check if RemainingArgs contains the rest of the second path
+        if ($RemainingArgs -and $RemainingArgs.Count -gt 0) {
+            # RemainingArgs likely contains fragments like: "A11\','C:\Users\...\SwitchAndroid'"
+            $remainingText = $RemainingArgs -join ' '
+            
+            # Try to reconstruct the second path
+            if ($remainingText -match "([A-Za-z]:\\[^']+)") {
+                $secondPathComplete = $matches[1].TrimEnd("'").TrimEnd('"')
+                $reconstructedPaths += $secondPathComplete
+                Write-Log "Reconstructed second path: $secondPathComplete" "DEBUG"
+            } else {
+                # Fallback: combine ConflictResolution with what we can from RemainingArgs
+                $reconstructedPaths += $secondPathStart
+            }
+        } else {
+            $reconstructedPaths += $secondPathStart
+        }
+        
+        # Reset ConflictResolution to default
+        $ConflictResolution = "Newest"
+    } else {
+        # Normal case - check if the first path contains commas
+        if ($firstPath.Contains(',')) {
+            Write-Log "Detected comma-separated string in -Path parameter, splitting into multiple entries..." "DEBUG"
+            $splitPaths = $firstPath -split ',' | ForEach-Object { $_.Trim().Trim('"').Trim("'") }
+            $reconstructedPaths += $splitPaths
+        } else {
+            $reconstructedPaths += $firstPath
         }
     }
 }
 
-# Sometimes shells bind additional path strings to the wrong named parameter (e.g. ConflictResolution)
-if (Is-PathLike $ConflictResolution) {
-    Write-Log "ConflictResolution looks like a path (was passed positionally). Moving it into -Path..." "DEBUG"
-    $Path += $ConflictResolution
-    $ConflictResolution = "Newest"
+# Add any remaining arguments that look like complete paths
+if ($RemainingArgs) {
+    foreach ($arg in $RemainingArgs) {
+        if ($arg -match '^[A-Za-z]:\\' -and -not $arg.Contains(',')) {
+            Write-Log "Found complete remaining path argument: $arg -- adding to Path list" "DEBUG"
+            $reconstructedPaths += $arg.Trim().Trim('"').Trim("'")
+        }
+    }
 }
 
 # Normalize and deduplicate Path entries
-$Path = $Path | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' } | Select-Object -Unique
+$Path = $reconstructedPaths | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' } | Select-Object -Unique
+
+Write-Log "Final processed paths: $($Path -join '; ')" "DEBUG"
 
 # Write-Log is defined above for use during parameter-repair diagnostics
 
