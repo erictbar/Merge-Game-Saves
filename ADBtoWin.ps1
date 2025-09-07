@@ -1,20 +1,21 @@
 param(
     [ValidateSet('Pull','Push')][string]$Action = 'Pull',
-    [string]$Device = '127.0.0.1:5555',
-    [string]$ConnectAddr = '127.0.0.1:5555',    # address used for adb connect if AutoConnect
-    [switch]$AutoConnect,                      # attempt "adb connect <ConnectAddr>" if device not listed
+    [string]$Device = '',  # Leave empty to auto-detect BlueStacks
+    [string]$ConnectAddr = '',
+    [string]$BlueStacksInstance = 'Rvc64',  # Which BlueStacks instance to use for auto-detection
+    [switch]$AutoConnect,
     [string]$RemotePath = '/sdcard/Android/data/com.crunchyroll.gv.blacklilystale.game/files/Savedata',
     [string]$LocalBase = "$env:USERPROFILE\OneDrive\Saves\Android\BlackLilyCR\BlueStacks A11",
     [switch]$Timestamped,
-    [string]$LocalSource = '',                 # optional explicit folder to push (Push action)
+    [string]$LocalSource = '',
     [string]$AdbExe = 'adb',
     [switch]$DryRun,
     [switch]$WhatIf,
     [switch]$ShowDetails,
-    [int]$InitialWait = 0,                     # seconds to wait before starting ADB operations
-    [int]$MaxRetries = 3,                      # number of times to retry ADB operations
-    [int]$RetryDelay = 5,                      # seconds between retries
-    [int]$ConnectTimeout = 10                  # seconds to wait for device connection
+    [int]$InitialWait = 0,
+    [int]$MaxRetries = 3,
+    [int]$RetryDelay = 5,
+    [int]$ConnectTimeout = 10
 )
 
 function Write-Log {
@@ -24,6 +25,95 @@ function Write-Log {
     elseif ($Level -eq 'WARN') { Write-Host "[$ts] [$Level] $Msg" -ForegroundColor Yellow }
     elseif ($Level -eq 'DEBUG' -and $ShowDetails) { Write-Host "[$ts] [$Level] $Msg" -ForegroundColor Gray }
     else { Write-Host "[$ts] [$Level] $Msg" }
+}
+
+function Get-BlueStacksADBPort {
+    param([string]$InstanceName = 'Rvc64')
+    
+    $configPath = "C:\ProgramData\BlueStacks_nxt\bluestacks.conf"
+    if (-not (Test-Path $configPath)) {
+        Write-Log "BlueStacks config not found at: $configPath" "WARN"
+        return $null
+    }
+    
+    try {
+        $content = Get-Content $configPath
+        $candidatePorts = @()
+        
+        # Collect all BlueStacks instances and their ports
+        foreach ($line in $content) {
+            if ($line -match "^bst\.instance\.([^.]+)\.status\.adb_port=`"(\d+)`"") {
+                $instanceName = $matches[1]
+                $port = $matches[2]
+                $candidatePorts += [PSCustomObject]@{
+                    Instance = $instanceName
+                    Port = $port
+                    Address = "127.0.0.1:$port"
+                    Priority = if ($instanceName -eq $InstanceName) { 1 } else { 2 }
+                }
+            }
+        }
+        
+        if ($candidatePorts.Count -eq 0) {
+            Write-Log "No BlueStacks instances found in config" "WARN"
+            return $null
+        }
+        
+        # Check which devices are actually online
+        Write-Log "Checking status of BlueStacks instances..." "DEBUG"
+        $devicesResult = Run-AdbRaw -ArgArray @('devices')
+        $onlineDevices = @()
+        
+        if ($devicesResult.Success) {
+            foreach ($line in $devicesResult.Output) {
+                if ($line -match "^\s*([^\s]+)\s+(device)\s*$") {
+                    $onlineDevices += $matches[1]
+                }
+            }
+        }
+        
+        # Prefer online devices, then by priority (matching InstanceName first)
+        $sortedCandidates = $candidatePorts | Sort-Object @(
+            @{Expression={if ($_.Address -in $onlineDevices) {0} else {1}}; Ascending=$true}
+            @{Expression='Priority'; Ascending=$true}
+        )
+        
+        $selectedDevice = $sortedCandidates[0]
+        $status = if ($selectedDevice.Address -in $onlineDevices) { "online" } else { "offline" }
+        
+        Write-Log "Found BlueStacks instances: $($candidatePorts | ForEach-Object { "$($_.Instance):$($_.Port)" } | Join-String ', ')" "DEBUG"
+        Write-Log "Selected BlueStacks $($selectedDevice.Instance) on port $($selectedDevice.Port) ($status)" "INFO"
+        
+        return $selectedDevice.Address
+        
+    } catch {
+        Write-Log "Error reading BlueStacks config: $($_.Exception.Message)" "WARN"
+        return $null
+    }
+}
+
+# Auto-detect BlueStacks ADB port if not specified
+if ([string]::IsNullOrEmpty($Device)) {
+    $detectedDevice = Get-BlueStacksADBPort -InstanceName $BlueStacksInstance
+    if ($detectedDevice) {
+        $Device = $detectedDevice
+        if ([string]::IsNullOrEmpty($ConnectAddr)) {
+            $ConnectAddr = $detectedDevice
+        }
+        Write-Log "Auto-detected BlueStacks device: $Device" "INFO"
+    } else {
+        # Fallback to default
+        $Device = "127.0.0.1:5555"
+        if ([string]::IsNullOrEmpty($ConnectAddr)) {
+            $ConnectAddr = "127.0.0.1:5555"
+        }
+        Write-Log "Could not auto-detect BlueStacks port, using default: $Device" "WARN"
+    }
+} else {
+    # Device was specified, ensure ConnectAddr is set
+    if ([string]::IsNullOrEmpty($ConnectAddr)) {
+        $ConnectAddr = $Device
+    }
 }
 
 # locate adb
@@ -280,69 +370,4 @@ try {
 } catch {
     Write-Log "Unexpected error: $_" "ERROR"
     exit 99
-}
-
-param(
-    [string]$InstanceName = "",  # e.g., "Pie64", "Nougat32", etc. If empty, returns first running instance
-    [string]$ConfigPath = "C:\ProgramData\BlueStacks_nxt\bluestacks.conf",
-    [switch]$ShowAll
-)
-
-function Get-BlueStacksADBPorts {
-    param([string]$ConfigFile)
-    
-    if (-not (Test-Path $ConfigFile)) {
-        Write-Error "BlueStacks config not found at: $ConfigFile"
-        return @()
-    }
-    
-    $ports = @()
-    $content = Get-Content $ConfigFile
-    
-    foreach ($line in $content) {
-        # Match lines like: bst.instance.Pie64.status.adb_port="5556"
-        if ($line -match '^bst\.instance\.([^.]+)\.status\.adb_port="(\d+)"') {
-            $instanceName = $matches[1]
-            $port = $matches[2]
-            
-            $ports += [PSCustomObject]@{
-                Instance = $instanceName
-                Port = $port
-                Address = "127.0.0.1:$port"
-            }
-        }
-    }
-    
-    return $ports
-}
-
-try {
-    $ports = Get-BlueStacksADBPorts -ConfigFile $ConfigPath
-    
-    if ($ports.Count -eq 0) {
-        Write-Error "No BlueStacks ADB ports found in config file"
-        exit 1
-    }
-    
-    if ($ShowAll) {
-        Write-Host "All BlueStacks instances and their ADB ports:"
-        $ports | Format-Table -AutoSize
-        exit 0
-    }
-    
-    if ($InstanceName) {
-        $targetPort = $ports | Where-Object { $_.Instance -eq $InstanceName }
-        if (-not $targetPort) {
-            Write-Error "Instance '$InstanceName' not found. Available instances: $($ports.Instance -join ', ')"
-            exit 1
-        }
-        Write-Output $targetPort.Address
-    } else {
-        # Return first port (most commonly used)
-        Write-Output $ports[0].Address
-    }
-    
-} catch {
-    Write-Error "Error reading BlueStacks config: $($_.Exception.Message)"
-    exit 1
 }

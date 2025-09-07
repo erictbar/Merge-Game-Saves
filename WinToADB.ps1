@@ -2,8 +2,9 @@
 # This is a wrapper around ADBtoWin.ps1 that specifically handles Win->ADB transfers
 
 param(
-    [string]$Device = '127.0.0.1:5555',
-    [string]$ConnectAddr = '127.0.0.1:5555',
+    [string]$Device = '',  # Leave empty to auto-detect BlueStacks
+    [string]$ConnectAddr = '',
+    [string]$BlueStacksInstance = 'Rvc64',  # Default to "BlueStacks Android 11"
     [switch]$AutoConnect,
     [string]$RemotePath = '/sdcard/Android/data/com.crunchyroll.gv.blacklilystale.game/files/Savedata',
     [string]$LocalBase = "$env:USERPROFILE\OneDrive\Saves\Android\BlackLilyCR\BlueStacks A11",
@@ -60,6 +61,59 @@ function Write-Log {
     elseif ($Level -eq 'SUCCESS') { Write-Host "[$ts] [$Level] $Msg" -ForegroundColor Green }
     elseif ($Level -eq 'DEBUG' -and $ShowDetails) { Write-Host "[$ts] [$Level] $Msg" -ForegroundColor Gray }
     else { Write-Host "[$ts] [$Level] $Msg" }
+}
+
+function Get-BlueStacksADBPort {
+    param([string]$InstanceName = 'Rvc64')
+    
+    $configPath = "C:\ProgramData\BlueStacks_nxt\bluestacks.conf"
+    if (-not (Test-Path $configPath)) {
+        Write-Log "BlueStacks config not found at: $configPath" "WARN"
+        return $null
+    }
+    
+    try {
+        $content = Get-Content $configPath
+        $pattern = "^bst\.instance\.$InstanceName\.status\.adb_port=`"(\d+)`""
+        
+        foreach ($line in $content) {
+            if ($line -match $pattern) {
+                $port = $matches[1]
+                Write-Log "Found BlueStacks $InstanceName on port: $port" "DEBUG"
+                return "127.0.0.1:$port"
+            }
+        }
+        
+        Write-Log "BlueStacks instance '$InstanceName' not found in config" "WARN"
+        return $null
+    } catch {
+        Write-Log "Error reading BlueStacks config: $($_.Exception.Message)" "WARN"
+        return $null
+    }
+}
+
+# Auto-detect BlueStacks ADB port if not specified
+if ([string]::IsNullOrEmpty($Device)) {
+    $detectedDevice = Get-BlueStacksADBPort -InstanceName $BlueStacksInstance
+    if ($detectedDevice) {
+        $Device = $detectedDevice
+        if ([string]::IsNullOrEmpty($ConnectAddr)) {
+            $ConnectAddr = $detectedDevice
+        }
+        Write-Log "Auto-detected BlueStacks device: $Device" "INFO"
+    } else {
+        # Fallback to default
+        $Device = "127.0.0.1:5555"
+        if ([string]::IsNullOrEmpty($ConnectAddr)) {
+            $ConnectAddr = "127.0.0.1:5555"
+        }
+        Write-Log "Could not auto-detect BlueStacks port, using default: $Device" "WARN"
+    }
+} else {
+    # Device was specified, ensure ConnectAddr is set
+    if ([string]::IsNullOrEmpty($ConnectAddr)) {
+        $ConnectAddr = $Device
+    }
 }
 
 # Get the directory where this script is located
