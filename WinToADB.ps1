@@ -95,43 +95,37 @@ if ($UseLatest -and -not $LocalSource) {
     Write-Log "Using latest folder: $LocalSource (modified: $($latestFolder.LastWriteTime))" "INFO"
 }
 
-# Prepare arguments for ADBtoWin.ps1
-$adbArgs = @(
-    '-Action', 'Push'
-    '-Device', $Device
-    '-ConnectAddr', $ConnectAddr
-    '-RemotePath', $RemotePath
-    '-LocalBase', $LocalBase
-    '-AdbExe', $AdbExe
-)
-
-if ($LocalSource) { $adbArgs += @('-LocalSource', $LocalSource) }
-if ($InitialWait -gt 0) { $adbArgs += @('-InitialWait', $InitialWait) }
-if ($MaxRetries -ne 3) { $adbArgs += @('-MaxRetries', $MaxRetries) }
-if ($RetryDelay -ne 5) { $adbArgs += @('-RetryDelay', $RetryDelay) }
-if ($ConnectTimeout -ne 10) { $adbArgs += @('-ConnectTimeout', $ConnectTimeout) }
-if ($AutoConnect) { $adbArgs += '-AutoConnect' }
-if ($DryRun) { $adbArgs += '-DryRun' }
-if ($WhatIf) { $adbArgs += '-WhatIf' }
-if ($ShowDetails) { $adbArgs += '-ShowDetails' }
-
-Write-Log "Calling ADBtoWin.ps1 with Push action..." "DEBUG"
-if ($ShowDetails) {
-    Write-Log "Arguments: $($adbArgs -join ' ')" "DEBUG"
+# Build hashtable for proper parameter splatting
+$adbParams = @{
+    Action      = 'Push'
+    Device      = $Device
+    ConnectAddr = $ConnectAddr
+    RemotePath  = $RemotePath
+    LocalBase   = $LocalBase
+    AdbExe      = $AdbExe
+    LocalSource = $LocalSource
+    InitialWait = $InitialWait
+    MaxRetries  = $MaxRetries
+    RetryDelay  = $RetryDelay
 }
 
-# Execute ADBtoWin.ps1 with Push action
+# Add switch parameters properly
+if ($AutoConnect) { $adbParams.AutoConnect = $true }
+if ($Timestamped) { $adbParams.Timestamped = $true }
+if ($DryRun) { $adbParams.DryRun = $true }
+if ($WhatIf) { $adbParams.WhatIf = $true }
+if ($ShowDetails) { $adbParams.ShowDetails = $true }
+
+Write-Log "Calling ADBtoWin.ps1 with Push action" "DEBUG"
+
 try {
-    & $adbtowinScript @adbArgs
-    $exitCode = $LASTEXITCODE
-    
-    if ($exitCode -eq 0) {
-        Write-Log "Push operation completed successfully" "SUCCESS"
-    } else {
-        Write-Log "Push operation failed with exit code $exitCode" "ERROR"
-        exit $exitCode
+    & $adbtowinScript @adbParams
+    if ($LASTEXITCODE -ne 0) {
+        Write-Log "ADBtoWin.ps1 returned exit code: $LASTEXITCODE" "ERROR"
+        exit $LASTEXITCODE
     }
+    Write-Log "Successfully completed push operation" "INFO"
 } catch {
-    Write-Log "Error executing ADBtoWin.ps1: $_" "ERROR"
-    exit 99
+    Write-Log "Error executing ADBtoWin.ps1: $($_.Exception.Message)" "ERROR"
+    exit 1
 }
