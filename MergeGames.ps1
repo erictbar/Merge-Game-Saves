@@ -178,7 +178,7 @@ function Test-PathAccess {
             }
         }
         
-        if (Test-Path -LiteralPath $Path) {
+        if (Test-Path -LiteralPath $Path -ErrorAction Stop) {
             $null = Get-ChildItem -LiteralPath $Path -ErrorAction Stop
             return $true
         } else {
@@ -285,7 +285,7 @@ function Backup-Inventory {
         }
         
         # Create backup directory
-        if (-not (Test-Path $backupDir)) {
+        if (-not (Test-Path $backupDir -ErrorAction Stop)) {
             New-Item -ItemType Directory -Path $backupDir -Force -ErrorAction Stop | Out-Null
         }
         
@@ -295,7 +295,7 @@ function Backup-Inventory {
             $backupFile = Join-Path $backupDir $file.RelativePath
             $backupFileDir = Split-Path $backupFile -Parent
             
-            if (-not (Test-Path $backupFileDir)) {
+            if (-not (Test-Path $backupFileDir -ErrorAction Stop)) {
                 New-Item -ItemType Directory -Path $backupFileDir -Force -ErrorAction Stop | Out-Null
             }
             
@@ -513,7 +513,7 @@ function Invoke-SyncActions {
                 }
                 
                 # Ensure target directory exists
-                if (-not (Test-Path $targetDir)) {
+                if (-not (Test-Path $targetDir -ErrorAction Stop)) {
                     New-Item -ItemType Directory -Path $targetDir -Force -ErrorAction Stop | Out-Null
                 }
                 
