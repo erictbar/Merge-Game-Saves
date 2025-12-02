@@ -178,23 +178,28 @@ function Test-PathAccess {
             }
         }
         
-        if (Test-Path -LiteralPath $Path -ErrorAction Stop) {
-            $null = Get-ChildItem -LiteralPath $Path -ErrorAction Stop
-            return $true
+        if (Test-Path -LiteralPath $Path -ErrorAction SilentlyContinue) {
+            try {
+                $null = Get-ChildItem -LiteralPath $Path -ErrorAction Stop
+                return $true
+            } catch {
+                Write-Log "Cannot access path: $Path - $($_.Exception.Message)" "WARN"
+                return $false
+            }
         } else {
             # Try to create the directory if it doesn't exist
-            Write-Log "Path does not exist, attempting to create: $Path" "WARN"
+            Write-Log "Path does not exist, attempting to create: $Path" "DEBUG"
             try {
                 New-Item -ItemType Directory -Path $Path -Force -ErrorAction Stop | Out-Null
                 Write-Log "Successfully created directory: $Path" "SUCCESS"
                 return $true
             } catch {
-                Write-Log "Cannot create directory: $Path - $($_.Exception.Message)" "ERROR"
+                Write-Log "Cannot create directory (network may be offline): $Path" "WARN"
                 return $false
             }
         }
     } catch {
-        Write-Log "Cannot access path: $Path - $($_.Exception.Message)" "ERROR"
+        Write-Log "Cannot access path (network may be offline): $Path" "WARN"
         return $false
     }
 }
