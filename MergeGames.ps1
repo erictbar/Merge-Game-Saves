@@ -17,6 +17,9 @@ param(
     [string[]]$RemainingArgs
 )
 
+# Set ErrorActionPreference to prevent external callers (like Playnite) from affecting error handling
+$ErrorActionPreference = 'Continue'
+
 # Show help if requested
 if ($Help) {
     Write-Host "MergeGames.ps1 - Sync game save files across multiple PCs"
@@ -76,7 +79,7 @@ if ($ShowDetails) {
 # PowerShell may split comma-separated paths across multiple parameters
 $reconstructedPaths = @()
 
-# Start with the first path
+# Process all paths in the Path array
 if ($Path.Count -gt 0) {
     $firstPath = $Path[0]
     
@@ -109,13 +112,16 @@ if ($Path.Count -gt 0) {
         # Reset ConflictResolution to default
         $ConflictResolution = "Newest"
     } else {
-        # Normal case - check if the first path contains commas
-        if ($firstPath.Contains(',')) {
-            Write-Log "Detected comma-separated string in -Path parameter, splitting into multiple entries..." "DEBUG"
-            $splitPaths = $firstPath -split ',' | ForEach-Object { $_.Trim().Trim('"').Trim("'") }
-            $reconstructedPaths += $splitPaths
-        } else {
-            $reconstructedPaths += $firstPath
+        # Normal case - process all paths in the array
+        foreach ($pathItem in $Path) {
+            # Check if this path contains commas (comma-separated string)
+            if ($pathItem.Contains(',')) {
+                Write-Log "Detected comma-separated string in -Path parameter, splitting into multiple entries..." "DEBUG"
+                $splitPaths = $pathItem -split ',' | ForEach-Object { $_.Trim().Trim('"').Trim("'") }
+                $reconstructedPaths += $splitPaths
+            } else {
+                $reconstructedPaths += $pathItem
+            }
         }
     }
 }
@@ -172,14 +178,14 @@ function Test-PathAccess {
             }
         }
         
-        if (Test-Path -LiteralPath $Path) {
+        if (Test-Path -LiteralPath $Path -ErrorAction Stop) {
             $null = Get-ChildItem -LiteralPath $Path -ErrorAction Stop
             return $true
         } else {
             # Try to create the directory if it doesn't exist
             Write-Log "Path does not exist, attempting to create: $Path" "WARN"
             try {
-                New-Item -ItemType Directory -Path $Path -Force | Out-Null
+                New-Item -ItemType Directory -Path $Path -Force -ErrorAction Stop | Out-Null
                 Write-Log "Successfully created directory: $Path" "SUCCESS"
                 return $true
             } catch {
@@ -279,8 +285,8 @@ function Backup-Inventory {
         }
         
         # Create backup directory
-        if (-not (Test-Path $backupDir)) {
-            New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
+        if (-not (Test-Path $backupDir -ErrorAction Stop)) {
+            New-Item -ItemType Directory -Path $backupDir -Force -ErrorAction Stop | Out-Null
         }
         
         # Copy files to backup
@@ -289,11 +295,11 @@ function Backup-Inventory {
             $backupFile = Join-Path $backupDir $file.RelativePath
             $backupFileDir = Split-Path $backupFile -Parent
             
-            if (-not (Test-Path $backupFileDir)) {
-                New-Item -ItemType Directory -Path $backupFileDir -Force | Out-Null
+            if (-not (Test-Path $backupFileDir -ErrorAction Stop)) {
+                New-Item -ItemType Directory -Path $backupFileDir -Force -ErrorAction Stop | Out-Null
             }
             
-            Copy-Item -LiteralPath $file.FullPath -Destination $backupFile -Force
+            Copy-Item -LiteralPath $file.FullPath -Destination $backupFile -Force -ErrorAction Stop
             $copiedCount++
         }
         
@@ -507,11 +513,11 @@ function Invoke-SyncActions {
                 }
                 
                 # Ensure target directory exists
-                if (-not (Test-Path $targetDir)) {
-                    New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
+                if (-not (Test-Path $targetDir -ErrorAction Stop)) {
+                    New-Item -ItemType Directory -Path $targetDir -Force -ErrorAction Stop | Out-Null
                 }
                 
-                Copy-Item -LiteralPath $action.Source -Destination $action.Target -Force
+                Copy-Item -LiteralPath $action.Source -Destination $action.Target -Force -ErrorAction Stop
                 Write-Log "Synced: $($action.RelativePath)" "SUCCESS"
                 $successCount++
             }
