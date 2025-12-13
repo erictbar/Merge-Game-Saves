@@ -143,38 +143,33 @@ Write-Log "Final processed paths: $($Path -join '; ')" "DEBUG"
 
 # Write-Log is defined above for use during parameter-repair diagnostics
 
-# Function to test if a path is accessible
+# Function to test if a path is accessible with timeout
 function Test-PathAccess {
     param([string]$Path)
     
     try {
         # Fast network connectivity check for UNC paths
-        if ($Path -match '^\\([^\\]+)\\') {
+        if ($Path -match '^\\\\([^\\]+)\\') {
             $hostname = $matches[1]
             Write-Log "Testing network connectivity to $hostname..." "DEBUG"
             
-            # Quick ping test - use different method for older PowerShell
+            # Quick TCP port test for SMB (port 445) - faster than ping
             try {
-                if (Get-Command Test-Connection -ParameterName TimeoutSeconds -ErrorAction SilentlyContinue) {
-                    # PowerShell 6+ with TimeoutSeconds parameter
-                    $ping = Test-Connection -ComputerName $hostname -Count 1 -Quiet -TimeoutSeconds 1 -ErrorAction SilentlyContinue
-                } else {
-                    # Older PowerShell - use .NET ping with timeout
-                    $pingObj = New-Object System.Net.NetworkInformation.Ping
-                    $result = $pingObj.Send($hostname, 1000)  # 1 second timeout
-                    $ping = ($result.Status -eq 'Success')
-                    $pingObj.Dispose()
-                }
+                $tcpClient = New-Object System.Net.Sockets.TcpClient
+                $connectTask = $tcpClient.ConnectAsync($hostname, 445)
+                $timeout = 2000  # 2 second timeout
                 
-                if (-not $ping) {
-                    # Many networks block ICMP/ping while SMB still works. Don't fail early on ping failure.
-                    Write-Log "Network host $hostname did not respond to ICMP/ping (may be blocked); will attempt filesystem access" "WARN"
+                if ($connectTask.Wait($timeout)) {
+                    $tcpClient.Close()
+                    Write-Log "Network host $hostname is reachable on SMB port 445" "DEBUG"
                 } else {
-                    Write-Log "Network host $hostname is reachable via ICMP" "DEBUG"
+                    $tcpClient.Close()
+                    Write-Log "Network host $hostname is not reachable (timeout after 2s) - skipping" "WARN"
+                    return $false
                 }
             } catch {
-                # If the ping/check fails for any reason, don't assume the share is unreachable — try filesystem access below.
-                Write-Log "Could not test connectivity to $hostname (ping failed); will attempt filesystem access" "WARN"
+                Write-Log "Network host $hostname is not reachable - skipping" "WARN"
+                return $false
             }
         }
         
