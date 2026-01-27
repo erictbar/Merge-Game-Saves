@@ -76,64 +76,83 @@ if ($ShowDetails) {
 }
 
 # Reconstruct paths from fragmented parameters
-# PowerShell may split comma-separated paths across multiple parameters
+# PowerShell command-line parsing may split paths with spaces across multiple parameters
 $reconstructedPaths = @()
 
-# Process all paths in the Path array
-if ($Path.Count -gt 0) {
-    $firstPath = $Path[0]
+# Valid ConflictResolution values
+$validConflictResolutions = @("Newest", "Largest", "Manual")
+
+# Check if ConflictResolution contains a path fragment instead of a valid option
+$conflictIsPathFragment = $false
+if ($ConflictResolution -and $ConflictResolution -notin $validConflictResolutions) {
+    Write-Log "ConflictResolution parameter contains non-standard value: '$ConflictResolution' - treating as path fragment" "DEBUG"
+    $conflictIsPathFragment = $true
+}
+
+# Collect all potential path fragments from Path, ConflictResolution, and RemainingArgs
+$allFragments = @()
+if ($Path) { $allFragments += $Path }
+if ($conflictIsPathFragment) { $allFragments += $ConflictResolution }
+if ($RemainingArgs) { $allFragments += $RemainingArgs }
+
+Write-Log "All parameter fragments: $($allFragments -join ' | ')" "DEBUG"
+
+# Strategy: Reassemble paths by identifying UNC/drive-letter boundaries
+# A new path starts with \\ or X:\ 
+$currentPath = ""
+foreach ($fragment in $allFragments) {
+    $fragment = $fragment.Trim().Trim('"').Trim("'").Trim()
     
-    # Check if ConflictResolution contains a path fragment that should be combined with the first path
-    if ($ConflictResolution -match "^['`"]?[A-Za-z]:\\") {
-        # ConflictResolution looks like it starts a new path
-        $reconstructedPaths += $firstPath
-        
-        # Extract the path from ConflictResolution (remove leading quote if present)
-        $secondPathStart = $ConflictResolution.TrimStart("'").TrimStart('"')
-        
-        # Check if RemainingArgs contains the rest of the second path
-        if ($RemainingArgs -and $RemainingArgs.Count -gt 0) {
-            # RemainingArgs likely contains fragments like: "A11\','C:\Users\...\SwitchAndroid'"
-            $remainingText = $RemainingArgs -join ' '
-            
-            # Try to reconstruct the second path
-            if ($remainingText -match "([A-Za-z]:\\[^']+)") {
-                $secondPathComplete = $matches[1].TrimEnd("'").TrimEnd('"')
-                $reconstructedPaths += $secondPathComplete
-                Write-Log "Reconstructed second path: $secondPathComplete" "DEBUG"
-            } else {
-                # Fallback: combine ConflictResolution with what we can from RemainingArgs
-                $reconstructedPaths += $secondPathStart
-            }
-        } else {
-            $reconstructedPaths += $secondPathStart
+    # Skip empty fragments
+    if (-not $fragment) { continue }
+    
+    # Check if this fragment starts a new path
+    if ($fragment -match '^(\\\\|[A-Za-z]:\\)') {
+        # Save the previous path if we have one
+        if ($currentPath) {
+            $reconstructedPaths += $currentPath.TrimEnd('\')
+            Write-Log "Reconstructed path: $currentPath" "DEBUG"
         }
-        
-        # Reset ConflictResolution to default
-        $ConflictResolution = "Newest"
+        # Start building new path
+        $currentPath = $fragment
     } else {
-        # Normal case - process all paths in the array
-        foreach ($pathItem in $Path) {
-            # Check if this path contains commas (comma-separated string)
-            if ($pathItem.Contains(',')) {
-                Write-Log "Detected comma-separated string in -Path parameter, splitting into multiple entries..." "DEBUG"
-                $splitPaths = $pathItem -split ',' | ForEach-Object { $_.Trim().Trim('"').Trim("'") }
-                $reconstructedPaths += $splitPaths
-            } else {
-                $reconstructedPaths += $pathItem
-            }
+        # This is a continuation fragment (space-separated part of current path)
+        if ($currentPath) {
+            # Append with a space
+            $currentPath += " $fragment"
+        } else {
+            # Orphan fragment with no preceding path start - treat as standalone
+            $currentPath = $fragment
         }
     }
 }
 
-# Add any remaining arguments that look like complete paths
-if ($RemainingArgs) {
-    foreach ($arg in $RemainingArgs) {
-        if ($arg -match '^[A-Za-z]:\\' -and -not $arg.Contains(',')) {
-            Write-Log "Found complete remaining path argument: $arg -- adding to Path list" "DEBUG"
-            $reconstructedPaths += $arg.Trim().Trim('"').Trim("'")
-        }
+# Don't forget the last path being built
+if ($currentPath) {
+    $reconstructedPaths += $currentPath.TrimEnd('\')
+    Write-Log "Reconstructed path: $currentPath" "DEBUG"
+}
+
+# Process comma-separated paths within individual elements
+$finalPaths = @()
+foreach ($pathItem in $reconstructedPaths) {
+    if ($pathItem.Contains(',')) {
+        Write-Log "Detected comma-separated string in path element, splitting: '$pathItem'" "DEBUG"
+        $splitPaths = $pathItem -split ',' | ForEach-Object { 
+            $_.Trim().Trim('"').Trim("'").Trim().TrimEnd('\')
+        } | Where-Object { $_ }
+        $finalPaths += $splitPaths
+    } else {
+        $finalPaths += $pathItem.TrimEnd('\')
     }
+}
+
+$reconstructedPaths = $finalPaths
+
+# Reset ConflictResolution to default if it was actually a path fragment
+if ($conflictIsPathFragment) {
+    Write-Log "Resetting ConflictResolution from '$ConflictResolution' to 'Newest' (was path fragment)" "DEBUG"
+    $ConflictResolution = "Newest"
 }
 
 # Normalize and deduplicate Path entries
