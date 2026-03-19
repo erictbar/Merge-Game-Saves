@@ -5,6 +5,8 @@ function Parse-ExistingCommand($cmd) {
     $scriptPath = ""
     $locations = @()
     $archive = ""
+    $edenTitleId = ""
+    $edenPath = ""
 
     # Extract script path from -File parameter  
     if ($cmd -match '-File\s+"([^"]+)"') {
@@ -40,10 +42,18 @@ function Parse-ExistingCommand($cmd) {
         $archive = $matches[1]
     }
 
+    # Extract Eden export settings
+    if ($cmd -match '(?:--Eden|-Eden)\s+"([^"]+)"\s+"([^"]+)"') {
+        $edenTitleId = $matches[1]
+        $edenPath = $matches[2]
+    }
+
     return @{ 
         ScriptPath = $scriptPath
         Locations = $locations
-        Archive = $archive 
+        Archive = $archive
+        EdenTitleId = $edenTitleId
+        EdenPath = $edenPath
     }
 }
 
@@ -60,12 +70,15 @@ if ($existingCmd) {
     $scriptPath = $parsed.ScriptPath
     $saveLocations = $parsed.Locations
     $archiveFolder = $parsed.Archive
+    $edenTitleId = $parsed.EdenTitleId
+    $edenPackagePath = $parsed.EdenPath
     
     Write-Host "Found:" -ForegroundColor Green
     Write-Host "  Script: $scriptPath"
     Write-Host "  Locations: $($saveLocations.Count) paths"
     $saveLocations | ForEach-Object { Write-Host "    $_" }
     if ($archiveFolder) { Write-Host "  Archive: $archiveFolder" }
+    if ($edenTitleId -and $edenPackagePath) { Write-Host "  Eden: $edenTitleId -> $edenPackagePath" }
 } else {
     # Start fresh
     $defaultScript = "C:\Users\erict\OneDrive\Developer\Scripts\Public\Merge Game Saves\MergeGames.ps1"
@@ -91,6 +104,8 @@ if ($existingCmd) {
     }
 
     $archiveFolder = Read-Host "Archive folder (optional)"
+    $edenTitleId = ""
+    $edenPackagePath = ""
 }
 
 # Add more locations
@@ -101,11 +116,26 @@ do {
     if ($newLoc) { $saveLocations += $newLoc }
 } while ($newLoc)
 
+$edenTitlePrompt = if ($edenTitleId) { "Eden title ID [$edenTitleId]" } else { "Eden title ID (optional)" }
+$edenTitleInput = Read-Host $edenTitlePrompt
+if ($edenTitleInput) {
+    $edenTitleId = $edenTitleInput
+}
+
+if ($edenTitleId) {
+    $edenPathPrompt = if ($edenPackagePath) { "Eden package path without .zip [$edenPackagePath]" } else { "Eden package path without .zip" }
+    $edenPathInput = Read-Host $edenPathPrompt
+    if ($edenPathInput) {
+        $edenPackagePath = $edenPathInput
+    }
+}
+
 # Build final command
 $pathsArg = "'" + ($saveLocations -join "','") + "'"
 $archiveArg = if ($archiveFolder) { " -Archive `"$archiveFolder`"" } else { "" }
+$edenArg = if ($edenTitleId -and $edenPackagePath) { " --Eden `"$edenTitleId`" `"$edenPackagePath`"" } else { "" }
 
-$finalCommand = "powershell.exe -ExecutionPolicy Bypass -File `"$scriptPath`" -Path $pathsArg$archiveArg"
+$finalCommand = "powershell.exe -ExecutionPolicy Bypass -File `"$scriptPath`" -Path $pathsArg$archiveArg$edenArg"
 
 Write-Host ""
 Write-Host "=== Generated Command ===" -ForegroundColor Cyan

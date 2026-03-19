@@ -29,6 +29,7 @@ if ($Help) {
     Write-Host "Parameters:"
     Write-Host "  -Path <path1>,<path2>     SMB paths to sync (comma-separated array)"
     Write-Host "  -Archive <path>           Archive location (default: %USERPROFILE%\OneDrive\Saves\Automation)"
+    Write-Host "  --Eden <titleId> <path>   Create <path>.zip with entries under <titleId>/ for Eden on Android"
     Write-Host "  -DryRun                   Show what would be done without making changes"
     Write-Host "  -ShowDetails              Show detailed logging"
     Write-Host "  -ConflictResolution       How to resolve conflicts: Newest, Largest, Manual (default: Newest)"
@@ -37,6 +38,7 @@ if ($Help) {
     Write-Host "Examples:"
     Write-Host "  MergeGames.ps1 -Path '\\192.168.1.100\d\Users\user\Gaes\GOG\Nukitashi\savedata','\\192.168.1.101\c\Apps\GOG\NUKITASHI\savedata'"
     Write-Host "  MergeGames.ps1 -Path '\\PC1\saves','\\PC2\saves' -DryRun -ShowDetails"
+    Write-Host "  MergeGames.ps1 -Path '\\PC1\saves','\\PC2\saves' --Eden '0100b280106a0000' 'Y:\Backup\Saves\Emulators\Eden\Aviary Attorney_ Definitive Edition'"
     exit 0
 }
 
@@ -66,6 +68,85 @@ function Test-IsPathLike([string]$s) {
     return ($s -match '^(\\\\|[A-Za-z]:\\)')
 }
 
+function Parse-ExtendedArguments {
+    param([string[]]$Arguments)
+
+    $parsedArgs = @{
+        Eden = $null
+        UnhandledArgs = @()
+    }
+
+    if (-not $Arguments) {
+        return $parsedArgs
+    }
+
+    for ($i = 0; $i -lt $Arguments.Count; $i++) {
+        $argument = $Arguments[$i]
+
+        switch -Regex ($argument) {
+            '^--?Eden$' {
+                if ($parsedArgs.Eden) {
+                    throw "Eden export can only be specified once."
+                }
+
+                if ($i + 1 -ge $Arguments.Count) {
+                    throw "Eden export requires a title ID and destination path."
+                }
+
+                $titleId = $Arguments[$i + 1].Trim().Trim('"').Trim("'")
+                $i++
+
+                if (-not $titleId) {
+                    throw "Eden export title ID cannot be empty."
+                }
+
+                $destinationFragments = @()
+                while ($i + 1 -lt $Arguments.Count) {
+                    $nextArgument = $Arguments[$i + 1]
+                    if ($nextArgument -match '^--?[A-Za-z]') {
+                        break
+                    }
+
+                    $destinationFragments += $nextArgument
+                    $i++
+                }
+
+                if ($destinationFragments.Count -eq 0) {
+                    throw "Eden export requires a destination path."
+                }
+
+                $destinationPath = (($destinationFragments | ForEach-Object {
+                    $_.Trim().Trim('"').Trim("'")
+                }) -join ' ').Trim().TrimEnd('\\')
+
+                if (-not $destinationPath) {
+                    throw "Eden export destination path cannot be empty."
+                }
+
+                $parsedArgs.Eden = @{
+                    TitleId = $titleId
+                    OutputPath = $destinationPath
+                }
+            }
+            default {
+                $parsedArgs.UnhandledArgs += $argument
+            }
+        }
+    }
+
+    return $parsedArgs
+}
+
+function Get-EdenZipPath {
+    param([string]$OutputPath)
+
+    if ($OutputPath -match '\.zip$') {
+        return $OutputPath
+    }
+
+    return "$OutputPath.zip"
+}
+
 # Handle parameter binding issues - collect all path-like arguments from various sources
 if ($ShowDetails) {
     Write-Log "Initial parameter values:" "DEBUG"
@@ -73,6 +154,14 @@ if ($ShowDetails) {
     Write-Log "  RemainingArgs: $($RemainingArgs -join '; ')" "DEBUG"
     Write-Log "  ConflictResolution: $ConflictResolution" "DEBUG"
     Write-Log "  args: $($args -join '; ')" "DEBUG"
+}
+
+$extendedArgs = Parse-ExtendedArguments -Arguments $RemainingArgs
+$RemainingArgs = $extendedArgs.UnhandledArgs
+$EdenExport = $extendedArgs.Eden
+
+if ($EdenExport) {
+    Write-Log "Eden export requested for title ID $($EdenExport.TitleId) -> $(Get-EdenZipPath -OutputPath $EdenExport.OutputPath)" "DEBUG"
 }
 
 # Reconstruct paths from fragmented parameters
@@ -407,33 +496,26 @@ function Resolve-FileConflict {
     }
 }
 
-# Function to sync files between locations
-function Sync-Files {
-    param(
-        [hashtable[]]$Inventories,
-        [string[]]$Paths
-    )
-    
-    # Create merged file list
+function Get-MergedFilePlan {
+    param([hashtable[]]$Inventories)
+
     $allFiles = @{}
-    
-    # Collect all unique files
+
     for ($i = 0; $i -lt $Inventories.Count; $i++) {
         foreach ($relativePath in $Inventories[$i].Keys) {
             if (-not $allFiles.ContainsKey($relativePath)) {
                 $allFiles[$relativePath] = @()
             }
+
             $allFiles[$relativePath] += $Inventories[$i][$relativePath]
         }
     }
-    
-    Write-Log "Processing $($allFiles.Count) unique files for synchronization" "INFO"
-    
-    $syncActions = @()
-    
+
+    $mergedFiles = @{}
+
     foreach ($relativePath in $allFiles.Keys) {
         $fileVersions = $allFiles[$relativePath]
-        # Find the source file (newest or resolved)
+
         if ($fileVersions.Count -eq 1) {
             $sourceFile = $fileVersions[0]
         } else {
@@ -445,8 +527,36 @@ function Sync-Files {
                     break
                 }
             }
+
             $sourceFile = $resolvedFile
         }
+
+        if ($sourceFile) {
+            $mergedFiles[$relativePath] = @{
+                SourceFile = $sourceFile
+                FileVersions = $fileVersions
+            }
+        }
+    }
+
+    return $mergedFiles
+}
+
+# Function to sync files between locations
+function Sync-Files {
+    param(
+        [hashtable]$MergedFiles,
+        [string[]]$Paths
+    )
+
+    Write-Log "Processing $($MergedFiles.Count) unique files for synchronization" "INFO"
+    
+    $syncActions = @()
+    
+    foreach ($relativePath in $MergedFiles.Keys) {
+        $sourceFile = $MergedFiles[$relativePath].SourceFile
+        $fileVersions = $MergedFiles[$relativePath].FileVersions
+
         # Copy to all locations where missing or outdated
         for ($i = 0; $i -lt $Paths.Count; $i++) {
             $targetPath = Join-Path $Paths[$i] $relativePath
@@ -478,6 +588,74 @@ function Sync-Files {
         }
     }
     return $syncActions
+}
+
+function Export-EdenPackage {
+    param(
+        [hashtable]$MergedFiles,
+        [string]$TitleId,
+        [string]$OutputPath
+    )
+
+    if (-not $MergedFiles -or $MergedFiles.Count -eq 0) {
+        Write-Log "Skipping Eden export because there are no files to package." "WARN"
+        return $null
+    }
+
+    $zipPath = Get-EdenZipPath -OutputPath $OutputPath
+
+    if ($DryRun) {
+        Write-Log "[DRY RUN] Would create Eden package at: $zipPath" "INFO"
+        Write-Log "[DRY RUN] Would include $($MergedFiles.Count) files under $TitleId/" "INFO"
+        return $zipPath
+    }
+
+    try {
+        $zipDirectory = Split-Path $zipPath -Parent
+        if ($zipDirectory -and -not (Test-Path -LiteralPath $zipDirectory -ErrorAction SilentlyContinue)) {
+            New-Item -ItemType Directory -Path $zipDirectory -Force -ErrorAction Stop | Out-Null
+        }
+
+        if (Test-Path -LiteralPath $zipPath -ErrorAction SilentlyContinue) {
+            Remove-Item -LiteralPath $zipPath -Force -ErrorAction Stop
+        }
+
+        Add-Type -AssemblyName System.IO.Compression
+
+        $fileStream = [System.IO.File]::Open($zipPath, [System.IO.FileMode]::CreateNew)
+        try {
+            $zipArchive = New-Object System.IO.Compression.ZipArchive($fileStream, [System.IO.Compression.ZipArchiveMode]::Create, $false)
+            try {
+                foreach ($relativePath in ($MergedFiles.Keys | Sort-Object)) {
+                    $sourceFile = $MergedFiles[$relativePath].SourceFile
+                    $entryPath = ($TitleId.Trim('/')) + '/' + ($relativePath.TrimStart('\\') -replace '\\', '/')
+                    $entry = $zipArchive.CreateEntry($entryPath, [System.IO.Compression.CompressionLevel]::Optimal)
+                    $entryStream = $entry.Open()
+
+                    try {
+                        $sourceStream = [System.IO.File]::OpenRead($sourceFile.FullPath)
+                        try {
+                            $sourceStream.CopyTo($entryStream)
+                        } finally {
+                            $sourceStream.Dispose()
+                        }
+                    } finally {
+                        $entryStream.Dispose()
+                    }
+                }
+            } finally {
+                $zipArchive.Dispose()
+            }
+        } finally {
+            $fileStream.Dispose()
+        }
+
+        Write-Log "Created Eden package with $($MergedFiles.Count) files at: $zipPath" "SUCCESS"
+        return $zipPath
+    } catch {
+        Write-Log "Error creating Eden package: $($_.Exception.Message)" "ERROR"
+        return $null
+    }
 }
 
 # Function to execute sync actions
@@ -565,6 +743,9 @@ try {
     Write-Log "Paths after processing: $($Path -join ', ')" "INFO"
     Write-Log "Archive: $Archive" "INFO"
     Write-Log "Conflict Resolution: $ConflictResolution" "INFO"
+    if ($EdenExport) {
+        Write-Log "Eden export: $($EdenExport.TitleId) -> $(Get-EdenZipPath -OutputPath $EdenExport.OutputPath)" "INFO"
+    }
     
     # Validate all paths are accessible
     $accessiblePaths = @()
@@ -594,6 +775,8 @@ try {
         $inventory = Get-FileInventory -Path $hostPath
         $inventories += $inventory
     }
+
+    $mergedFiles = Get-MergedFilePlan -Inventories $inventories
     
     # Create backups before synchronization
     Write-Log "Creating backups..." "INFO"
@@ -610,12 +793,18 @@ try {
     # Generate sync actions (only if we have multiple accessible paths)
     if ($accessiblePaths.Count -ge 2) {
         Write-Log "Analyzing differences and generating sync plan..." "INFO"
-    $syncActions = Sync-Files -Inventories $inventories -Paths $accessiblePaths
+    $syncActions = Sync-Files -MergedFiles $mergedFiles -Paths $accessiblePaths
 
     # Execute sync actions
     Invoke-SyncActions -SyncActions $syncActions
     } else {
         Write-Log "Skipping synchronization (only one accessible path). Backup created successfully." "WARN"
+    }
+
+    $edenPackagePath = $null
+    if ($EdenExport) {
+        Write-Log "Creating Eden export package..." "INFO"
+        $edenPackagePath = Export-EdenPackage -MergedFiles $mergedFiles -TitleId $EdenExport.TitleId -OutputPath $EdenExport.OutputPath
     }
     
     Write-Log "Game save file synchronization completed successfully" "SUCCESS"
@@ -625,6 +814,10 @@ try {
         foreach ($backupPath in $backupPaths) {
             Write-Log "  $backupPath" "INFO"
         }
+    }
+
+    if ($edenPackagePath) {
+        Write-Log "Eden package created at: $edenPackagePath" "INFO"
     }
 
 } catch {

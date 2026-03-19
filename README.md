@@ -14,18 +14,19 @@ Playnite's feature to input a Script to Excute before starting a game and after 
 ### Command Example
 
 ```powershell
-pwsh.exe -ExecutionPolicy Bypass -File "C:\Path\To\MergeGames.ps1" -Path "\\<IP1>\<Location of Save Data>","\\<IP2>\<Location of Save Data>" -Archive "C:\Path\To\Archive\Folder"
+pwsh.exe -ExecutionPolicy Bypass -File "C:\Path\To\MergeGames.ps1" -Path "\\<IP1>\<Location of Save Data>","\\<IP2>\<Location of Save Data>" -Archive "C:\Path\To\Archive\Folder" --Eden "0100b280106a0000" "Y:\Backup\Saves\Emulators\Eden\Game Name"
 ```
 
 - Replace `<IP1>` and `<IP2>` with the IP addresses or hostnames of your source machines.
 - Replace `<User1>` and `<User2>` with the Windows usernames on each machine.
 - Replace the rest of the file path with the folder that contains all the saves for the game.
 - The `-Archive` parameter specifies the folder where merged saves will be archived.
+- The optional `--Eden` arguments create `Game Name.zip` with contents laid out as `0100b280106a0000/<merged save contents>` for import into Eden on Android.
 
 ### Example
 
 ```powershell
-pwsh.exe -ExecutionPolicy Bypass -File "C:\Scripts\MergeGames.ps1" -Path "\\192.168.1.10\c\Users\Alice\AppData\Roaming\suyu\nand\user\save\0000000000000000\GAMEID","\\192.168.1.11\c\Users\Bob\AppData\Roaming\suyu\nand\user\save\0000000000000000\GAMEID" -Archive "C:\Saves\Nintendo\Switch\GameName"
+pwsh.exe -ExecutionPolicy Bypass -File "C:\Scripts\MergeGames.ps1" -Path "\\192.168.1.10\c\Users\Alice\AppData\Roaming\suyu\nand\user\save\0000000000000000\GAMEID","\\192.168.1.11\c\Users\Bob\AppData\Roaming\suyu\nand\user\save\0000000000000000\GAMEID" -Archive "C:\Saves\Nintendo\Switch\GameName" --Eden "0100b280106a0000" "Y:\Backup\Saves\Emulators\Eden\Aviary Attorney_ Definitive Edition"
 ```
 
 ## Using with Playnite
@@ -38,7 +39,7 @@ You can configure Playnite to run this script automatically before and after lau
 3. Add the following command to the **Pre-Script** and/or **Post-Script** fields:
 
    ```powershell
-   pwsh.exe -ExecutionPolicy Bypass -File "C:\Path\To\MergeGames.ps1" -Path "\\<IP1>\<Location of Save Data>","\\<IP2>\<Location of Save Data>" -Archive "C:\Path\To\Archive\Folder"
+   pwsh.exe -ExecutionPolicy Bypass -File "C:\Path\To\MergeGames.ps1" -Path "\\<IP1>\<Location of Save Data>","\\<IP2>\<Location of Save Data>" -Archive "C:\Path\To\Archive\Folder" --Eden "0100b280106a0000" "Y:\Backup\Saves\Emulators\Eden\Game Name"
    ```
 
 4. Adjust the paths and parameters as needed for your setup.
@@ -52,6 +53,7 @@ You can configure Playnite to run this script automatically before and after lau
 ## Parameters
 - `-Path` (required): Comma-separated list of save directories to merge.
 - `-Archive` (optional, recommended): Path to the folder where the merged save will be archived.
+- `--Eden <titleId> <path>` (optional): Creates `<path>.zip` containing `<titleId>/<merged save contents>` so the package can be imported into Eden on Android.
 
 
 ## Notes
