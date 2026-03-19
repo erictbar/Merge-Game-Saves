@@ -69,7 +69,10 @@ function Test-IsPathLike([string]$s) {
 }
 
 function Parse-ExtendedArguments {
-    param([string[]]$Arguments)
+    param(
+        [string[]]$Arguments,
+        [string]$FallbackEdenPath
+    )
 
     $parsedArgs = @{
         Eden = $null
@@ -111,6 +114,10 @@ function Parse-ExtendedArguments {
                     $i++
                 }
 
+                if ($destinationFragments.Count -eq 0 -and $FallbackEdenPath) {
+                    $destinationFragments += $FallbackEdenPath
+                }
+
                 if ($destinationFragments.Count -eq 0) {
                     throw "Eden export requires a destination path."
                 }
@@ -140,11 +147,15 @@ function Parse-ExtendedArguments {
 function Get-EdenZipPath {
     param([string]$OutputPath)
 
+    $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+
     if ($OutputPath -match '\.zip$') {
-        return $OutputPath
+        $directory = Split-Path $OutputPath -Parent
+        $fileName = [System.IO.Path]::GetFileNameWithoutExtension($OutputPath)
+        return (Join-Path $directory "$fileName`_$timestamp.zip")
     }
 
-    return "$OutputPath.zip"
+    return "$OutputPath`_$timestamp.zip"
 }
 
 # Handle parameter binding issues - collect all path-like arguments from various sources
@@ -154,14 +165,6 @@ if ($ShowDetails) {
     Write-Log "  RemainingArgs: $($RemainingArgs -join '; ')" "DEBUG"
     Write-Log "  ConflictResolution: $ConflictResolution" "DEBUG"
     Write-Log "  args: $($args -join '; ')" "DEBUG"
-}
-
-$extendedArgs = Parse-ExtendedArguments -Arguments $RemainingArgs
-$RemainingArgs = $extendedArgs.UnhandledArgs
-$EdenExport = $extendedArgs.Eden
-
-if ($EdenExport) {
-    Write-Log "Eden export requested for title ID $($EdenExport.TitleId) -> $(Get-EdenZipPath -OutputPath $EdenExport.OutputPath)" "DEBUG"
 }
 
 # Reconstruct paths from fragmented parameters
@@ -176,6 +179,19 @@ $conflictIsPathFragment = $false
 if ($ConflictResolution -and $ConflictResolution -notin $validConflictResolutions) {
     Write-Log "ConflictResolution parameter contains non-standard value: '$ConflictResolution' - treating as path fragment" "DEBUG"
     $conflictIsPathFragment = $true
+}
+
+$extendedArgs = Parse-ExtendedArguments -Arguments $RemainingArgs -FallbackEdenPath $(if ($conflictIsPathFragment) { $ConflictResolution } else { $null })
+$RemainingArgs = $extendedArgs.UnhandledArgs
+$EdenExport = $extendedArgs.Eden
+
+if ($EdenExport) {
+    if ($conflictIsPathFragment -and $EdenExport.OutputPath.TrimEnd('\\') -eq $ConflictResolution.Trim().Trim('"').Trim("'").TrimEnd('\\')) {
+        $ConflictResolution = "Newest"
+        $conflictIsPathFragment = $false
+    }
+
+    Write-Log "Eden export requested for title ID $($EdenExport.TitleId) -> $(Get-EdenZipPath -OutputPath $EdenExport.OutputPath)" "DEBUG"
 }
 
 # Collect all potential path fragments from Path, ConflictResolution, and RemainingArgs

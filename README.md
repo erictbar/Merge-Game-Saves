@@ -21,7 +21,7 @@ pwsh.exe -ExecutionPolicy Bypass -File "C:\Path\To\MergeGames.ps1" -Path "\\<IP1
 - Replace `<User1>` and `<User2>` with the Windows usernames on each machine.
 - Replace the rest of the file path with the folder that contains all the saves for the game.
 - The `-Archive` parameter specifies the folder where merged saves will be archived.
-- The optional `--Eden` arguments create `Game Name.zip` with contents laid out as `0100b280106a0000/<merged save contents>` for import into Eden on Android.
+- The optional `--Eden` arguments create `Game Name_yyyyMMdd_HHmmss.zip` with contents laid out as `0100b280106a0000/<merged save contents>` for import into Eden on Android.
 
 ### Example
 
@@ -53,7 +53,7 @@ You can configure Playnite to run this script automatically before and after lau
 ## Parameters
 - `-Path` (required): Comma-separated list of save directories to merge.
 - `-Archive` (optional, recommended): Path to the folder where the merged save will be archived.
-- `--Eden <titleId> <path>` (optional): Creates `<path>.zip` containing `<titleId>/<merged save contents>` so the package can be imported into Eden on Android.
+- `--Eden <titleId> <path>` (optional): Creates `<path>_yyyyMMdd_HHmmss.zip` containing `<titleId>/<merged save contents>` so the package can be imported into Eden on Android.
 
 
 ## Notes
