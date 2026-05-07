@@ -103,7 +103,7 @@ if ($existingCmd) {
         exit 1
     }
 
-    $archiveFolder = Read-Host "Archive folder (optional)"
+    $archiveFolder = ""
     $edenTitleId = ""
     $edenPackagePath = ""
 }
@@ -128,6 +128,12 @@ if ($edenTitleId) {
     if ($edenPathInput) {
         $edenPackagePath = $edenPathInput
     }
+}
+
+$archivePrompt = if ($archiveFolder) { "Archive folder (optional) [$archiveFolder]" } else { "Archive folder (optional)" }
+$archiveInput = Read-Host $archivePrompt
+if ($archiveInput) {
+    $archiveFolder = $archiveInput
 }
 
 # Build final command
