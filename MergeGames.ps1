@@ -5,6 +5,8 @@ param(
 
     [string]$Archive = "$env:USERPROFILE\Documents\GameSaves\Archive",
 
+    [string[]]$Ignore = @(),
+
     [switch]$DryRun,
 
     [switch]$ShowDetails,
@@ -29,6 +31,7 @@ if ($Help) {
     Write-Host "Parameters:"
     Write-Host "  -Path <path1>,<path2>     SMB paths to sync (comma-separated array)"
     Write-Host "  -Archive <path>           Archive location (default: %USERPROFILE%\OneDrive\Saves\Automation)"
+    Write-Host "  -Ignore <item1>,<item2>   Ignore directory names, file extensions, or exact file names"
     Write-Host "  --Eden <titleId> <path>   Create <path>.zip with entries under <titleId>/ for Eden on Android"
     Write-Host "  -DryRun                   Show what would be done without making changes"
     Write-Host "  -ShowDetails              Show detailed logging"
@@ -38,6 +41,7 @@ if ($Help) {
     Write-Host "Examples:"
     Write-Host "  MergeGames.ps1 -Path '\\192.168.1.100\d\Users\user\Gaes\GOG\Nukitashi\savedata','\\192.168.1.101\c\Apps\GOG\NUKITASHI\savedata'"
     Write-Host "  MergeGames.ps1 -Path '\\PC1\saves','\\PC2\saves' -DryRun -ShowDetails"
+    Write-Host "  MergeGames.ps1 -Path '\\PC1\saves','\\PC2\saves' -Ignore 'Unity','.log','Player-prev.log'"
     Write-Host "  MergeGames.ps1 -Path '\\PC1\saves','\\PC2\saves' --Eden '0100b280106a0000' 'Y:\Backup\Saves\Emulators\Eden\Aviary Attorney_ Definitive Edition'"
     exit 0
 }
@@ -185,6 +189,15 @@ $extendedArgs = Parse-ExtendedArguments -Arguments $RemainingArgs -FallbackEdenP
 $RemainingArgs = $extendedArgs.UnhandledArgs
 $EdenExport = $extendedArgs.Eden
 
+if ($Ignore.Count -gt 0 -and $RemainingArgs.Count -gt 0) {
+    $ignoreContinuations = @()
+    while ($RemainingArgs.Count -gt 0 -and -not (Test-IsPathLike $RemainingArgs[0])) {
+        $ignoreContinuations += $RemainingArgs[0]
+        $RemainingArgs = @($RemainingArgs | Select-Object -Skip 1)
+    }
+    $Ignore += $ignoreContinuations
+}
+
 if ($EdenExport) {
     if ($conflictIsPathFragment -and $EdenExport.OutputPath.TrimEnd('\\') -eq $ConflictResolution.Trim().Trim('"').Trim("'").TrimEnd('\\')) {
         $ConflictResolution = "Newest"
@@ -262,8 +275,12 @@ if ($conflictIsPathFragment) {
 
 # Normalize and deduplicate Path entries
 $Path = $reconstructedPaths | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' } | Select-Object -Unique
+$Ignore = $Ignore | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim().Trim('"').Trim("'") } | Where-Object { $_ -ne '' } | Select-Object -Unique
 
 Write-Log "Final processed paths: $($Path -join '; ')" "DEBUG"
+if ($Ignore.Count -gt 0) {
+    Write-Log "Ignoring: $($Ignore -join '; ')" "DEBUG"
+}
 
 # Write-Log is defined above for use during parameter-repair diagnostics
 
@@ -323,9 +340,40 @@ function Test-PathAccess {
     }
 }
 
+# Function to test whether a file matches an ignore rule
+function Test-IsIgnoredFile {
+    param(
+        [System.IO.FileInfo]$File,
+        [string]$RootPath,
+        [string[]]$IgnoreRules
+    )
+
+    if (-not $IgnoreRules -or $IgnoreRules.Count -eq 0) {
+        return $false
+    }
+
+    $relativePath = $File.FullName.Substring($RootPath.Length).TrimStart('\')
+    $directoryNames = (Split-Path $relativePath -Parent) -split '\\' | Where-Object { $_ }
+
+    foreach ($rule in $IgnoreRules) {
+        if ($rule.StartsWith('.')) {
+            if ($File.Extension -ieq $rule) {
+                return $true
+            }
+        } elseif ($File.Name -ieq $rule -or $directoryNames -contains $rule) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
 # Function to get all files with metadata
 function Get-FileInventory {
-    param([string]$Path)
+    param(
+        [string]$Path,
+        [string[]]$IgnoreRules
+    )
     
     $inventory = @{}
     
@@ -333,6 +381,11 @@ function Get-FileInventory {
         $files = Get-ChildItem -LiteralPath $Path -File -Recurse -ErrorAction Stop
         
         foreach ($file in $files) {
+            if (Test-IsIgnoredFile -File $file -RootPath $Path -IgnoreRules $IgnoreRules) {
+                Write-Log "Ignoring: $($file.FullName)" "DEBUG"
+                continue
+            }
+
             $relativePath = $file.FullName.Substring($Path.Length).TrimStart('\')
             $inventory[$relativePath] = @{
                 FullPath = $file.FullName
@@ -758,6 +811,9 @@ try {
     
     Write-Log "Paths after processing: $($Path -join ', ')" "INFO"
     Write-Log "Archive: $Archive" "INFO"
+    if ($Ignore.Count -gt 0) {
+        Write-Log "Ignore rules: $($Ignore -join ', ')" "INFO"
+    }
     Write-Log "Conflict Resolution: $ConflictResolution" "INFO"
     if ($EdenExport) {
         Write-Log "Eden export: $($EdenExport.TitleId) -> $(Get-EdenZipPath -OutputPath $EdenExport.OutputPath)" "INFO"
@@ -788,7 +844,7 @@ try {
     Write-Log "Scanning files in all locations..." "INFO"
     $inventories = @()
     foreach ($hostPath in $accessiblePaths) {
-        $inventory = Get-FileInventory -Path $hostPath
+        $inventory = Get-FileInventory -Path $hostPath -IgnoreRules $Ignore
         $inventories += $inventory
     }
 

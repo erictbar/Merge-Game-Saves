@@ -14,19 +14,20 @@ Playnite's feature to input a Script to Excute before starting a game and after 
 ### Command Example
 
 ```powershell
-pwsh.exe -ExecutionPolicy Bypass -File "C:\Path\To\MergeGames.ps1" -Path "\\<IP1>\<Location of Save Data>","\\<IP2>\<Location of Save Data>" -Archive "C:\Path\To\Archive\Folder" --Eden "0100b280106a0000" "Y:\Backup\Saves\Emulators\Eden\Game Name"
+pwsh.exe -ExecutionPolicy Bypass -File "C:\Path\To\MergeGames.ps1" -Path "\\<IP1>\<Location of Save Data>","\\<IP2>\<Location of Save Data>" -Archive "C:\Path\To\Archive\Folder" -Ignore "Unity",".log","Player-prev.log" --Eden "0100b280106a0000" "Y:\Backup\Saves\Emulators\Eden\Game Name"
 ```
 
 - Replace `<IP1>` and `<IP2>` with the IP addresses or hostnames of your source machines.
 - Replace `<User1>` and `<User2>` with the Windows usernames on each machine.
 - Replace the rest of the file path with the folder that contains all the saves for the game.
 - The `-Archive` parameter specifies the folder where merged saves will be archived.
+- The optional `-Ignore` parameter excludes all files beneath a named directory (for example, `Unity`), files with an extension (for example, `.log`), or an exact file name (for example, `Player-prev.log`). Ignored files are not synchronized, archived, or included in Eden packages.
 - The optional `--Eden` arguments create `Game Name_yyyyMMdd_HHmmss.zip` with contents laid out as `0100b280106a0000/<merged save contents>` for import into Eden on Android.
 
 ### Example
 
 ```powershell
-pwsh.exe -ExecutionPolicy Bypass -File "C:\Scripts\MergeGames.ps1" -Path "\\192.168.1.10\c\Users\Alice\AppData\Roaming\suyu\nand\user\save\0000000000000000\GAMEID","\\192.168.1.11\c\Users\Bob\AppData\Roaming\suyu\nand\user\save\0000000000000000\GAMEID" -Archive "C:\Saves\Nintendo\Switch\GameName" --Eden "0100b280106a0000" "Y:\Backup\Saves\Emulators\Eden\Aviary Attorney_ Definitive Edition"
+pwsh.exe -ExecutionPolicy Bypass -File "C:\Scripts\MergeGames.ps1" -Path "\\192.168.1.10\c\Users\Alice\AppData\Roaming\suyu\nand\user\save\0000000000000000\GAMEID","\\192.168.1.11\c\Users\Bob\AppData\Roaming\suyu\nand\user\save\0000000000000000\GAMEID" -Archive "C:\Saves\Nintendo\Switch\GameName" -Ignore "cache",".log" --Eden "0100b280106a0000" "Y:\Backup\Saves\Emulators\Eden\Aviary Attorney_ Definitive Edition"
 ```
 
 ## Using with Playnite
@@ -53,6 +54,7 @@ You can configure Playnite to run this script automatically before and after lau
 ## Parameters
 - `-Path` (required): Comma-separated list of save directories to merge.
 - `-Archive` (optional, recommended): Path to the folder where the merged save will be archived.
+- `-Ignore` (optional): One or more directory names, file extensions, or exact file names to omit. For example: `-Ignore "Unity",".log","Player-prev.log"`.
 - `--Eden <titleId> <path>` (optional): Creates `<path>_yyyyMMdd_HHmmss.zip` containing `<titleId>/<merged save contents>` so the package can be imported into Eden on Android.
 
 
