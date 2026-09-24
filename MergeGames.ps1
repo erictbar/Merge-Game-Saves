@@ -178,17 +178,17 @@ $defaultArchivePath = "$env:USERPROFILE\Documents\GameSaves\Archive"
 
 # Determine whether -Ignore/--Ignore was explicitly provided by the caller.
 # If it wasn't, any values bound to $Ignore are likely path fragments from broken parsing.
-$invocationHasIgnoreFlag = $false
-if ($MyInvocation.Line -and $MyInvocation.Line -match '(?i)(?:^|\s)--?Ignore(?=\s|:|$)') {
-    $invocationHasIgnoreFlag = $true
-}
-$ignoreExplicitlySpecified = $PSBoundParameters.ContainsKey('Ignore') -or $invocationHasIgnoreFlag
+# NOTE: $PSBoundParameters.ContainsKey() is true even for values that landed on these
+# parameters via accidental positional binding (a side effect of mis-split path fragments),
+# so it cannot be used as a signal here. $MyInvocation.Line is also unreliable - it is empty
+# when the script is invoked via "powershell.exe -File ...". The only trustworthy source of
+# the literal tokens the process received is the raw process command line.
+$rawCommandLineArgs = [Environment]::GetCommandLineArgs()
+$invocationHasIgnoreFlag = @($rawCommandLineArgs | Where-Object { $_ -match '(?i)^--?Ignore$' }).Count -gt 0
+$ignoreExplicitlySpecified = $invocationHasIgnoreFlag
 
-$invocationHasArchiveFlag = $false
-if ($MyInvocation.Line -and $MyInvocation.Line -match '(?i)(?:^|\s)-Archive(?=\s|:|$)') {
-    $invocationHasArchiveFlag = $true
-}
-$archiveExplicitlySpecified = $PSBoundParameters.ContainsKey('Archive') -or $invocationHasArchiveFlag
+$invocationHasArchiveFlag = @($rawCommandLineArgs | Where-Object { $_ -match '(?i)^-Archive$' }).Count -gt 0
+$archiveExplicitlySpecified = $invocationHasArchiveFlag
 
 # Valid ConflictResolution values
 $validConflictResolutions = @("Newest", "Largest", "Manual")
