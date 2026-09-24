@@ -177,10 +177,11 @@ $reconstructedPaths = @()
 
 # Determine whether -Ignore/--Ignore was explicitly provided by the caller.
 # If it wasn't, any values bound to $Ignore are likely path fragments from broken parsing.
-$ignoreExplicitlySpecified = $false
+$invocationHasIgnoreFlag = $false
 if ($MyInvocation.Line -and $MyInvocation.Line -match '(?i)(?:^|\s)--?Ignore(?=\s|:|$)') {
-    $ignoreExplicitlySpecified = $true
+    $invocationHasIgnoreFlag = $true
 }
+$ignoreExplicitlySpecified = $PSBoundParameters.ContainsKey('Ignore') -or $invocationHasIgnoreFlag
 
 # Valid ConflictResolution values
 $validConflictResolutions = @("Newest", "Largest", "Manual")
@@ -195,6 +196,11 @@ if ($ConflictResolution -and $ConflictResolution -notin $validConflictResolution
 $extendedArgs = Parse-ExtendedArguments -Arguments $RemainingArgs -FallbackEdenPath $(if ($conflictIsPathFragment) { $ConflictResolution } else { $null })
 $RemainingArgs = $extendedArgs.UnhandledArgs
 $EdenExport = $extendedArgs.Eden
+
+if ($ignoreExplicitlySpecified -and -not $invocationHasIgnoreFlag -and $Ignore.Count -gt 0 -and $RemainingArgs.Count -gt 0) {
+    Write-Log "Ignore appears to contain fragmented path tokens (no explicit -Ignore flag); reclassifying as path fragments" "DEBUG"
+    $ignoreExplicitlySpecified = $false
+}
 
 if ($ignoreExplicitlySpecified -and $Ignore.Count -gt 0 -and $RemainingArgs.Count -gt 0) {
     $ignoreContinuations = @()
