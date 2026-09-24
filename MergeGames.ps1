@@ -175,6 +175,13 @@ if ($ShowDetails) {
 # PowerShell command-line parsing may split paths with spaces across multiple parameters
 $reconstructedPaths = @()
 
+# Determine whether -Ignore/--Ignore was explicitly provided by the caller.
+# If it wasn't, any values bound to $Ignore are likely path fragments from broken parsing.
+$ignoreExplicitlySpecified = $false
+if ($MyInvocation.Line -and $MyInvocation.Line -match '(?i)(?:^|\s)--?Ignore(?=\s|:|$)') {
+    $ignoreExplicitlySpecified = $true
+}
+
 # Valid ConflictResolution values
 $validConflictResolutions = @("Newest", "Largest", "Manual")
 
@@ -189,7 +196,7 @@ $extendedArgs = Parse-ExtendedArguments -Arguments $RemainingArgs -FallbackEdenP
 $RemainingArgs = $extendedArgs.UnhandledArgs
 $EdenExport = $extendedArgs.Eden
 
-if ($Ignore.Count -gt 0 -and $RemainingArgs.Count -gt 0) {
+if ($ignoreExplicitlySpecified -and $Ignore.Count -gt 0 -and $RemainingArgs.Count -gt 0) {
     $ignoreContinuations = @()
     while ($RemainingArgs.Count -gt 0 -and -not (Test-IsPathLike $RemainingArgs[0])) {
         $ignoreContinuations += $RemainingArgs[0]
@@ -212,6 +219,11 @@ $allFragments = @()
 if ($Path) { $allFragments += $Path }
 if ($conflictIsPathFragment) { $allFragments += $ConflictResolution }
 if ($RemainingArgs) { $allFragments += $RemainingArgs }
+if (-not $ignoreExplicitlySpecified -and $Ignore.Count -gt 0) {
+    Write-Log "Ignore rules were not explicitly specified; treating Ignore values as path fragments: $($Ignore -join ' | ')" "DEBUG"
+    $allFragments += $Ignore
+    $Ignore = @()
+}
 
 Write-Log "All parameter fragments: $($allFragments -join ' | ')" "DEBUG"
 
