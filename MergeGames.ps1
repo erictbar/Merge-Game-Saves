@@ -174,6 +174,7 @@ if ($ShowDetails) {
 # Reconstruct paths from fragmented parameters
 # PowerShell command-line parsing may split paths with spaces across multiple parameters
 $reconstructedPaths = @()
+$defaultArchivePath = "$env:USERPROFILE\Documents\GameSaves\Archive"
 
 # Determine whether -Ignore/--Ignore was explicitly provided by the caller.
 # If it wasn't, any values bound to $Ignore are likely path fragments from broken parsing.
@@ -182,6 +183,12 @@ if ($MyInvocation.Line -and $MyInvocation.Line -match '(?i)(?:^|\s)--?Ignore(?=\
     $invocationHasIgnoreFlag = $true
 }
 $ignoreExplicitlySpecified = $PSBoundParameters.ContainsKey('Ignore') -or $invocationHasIgnoreFlag
+
+$invocationHasArchiveFlag = $false
+if ($MyInvocation.Line -and $MyInvocation.Line -match '(?i)(?:^|\s)-Archive(?=\s|:|$)') {
+    $invocationHasArchiveFlag = $true
+}
+$archiveExplicitlySpecified = $PSBoundParameters.ContainsKey('Archive') -or $invocationHasArchiveFlag
 
 # Valid ConflictResolution values
 $validConflictResolutions = @("Newest", "Largest", "Manual")
@@ -197,9 +204,24 @@ $extendedArgs = Parse-ExtendedArguments -Arguments $RemainingArgs -FallbackEdenP
 $RemainingArgs = $extendedArgs.UnhandledArgs
 $EdenExport = $extendedArgs.Eden
 
-if ($ignoreExplicitlySpecified -and -not $invocationHasIgnoreFlag -and $Ignore.Count -gt 0 -and $RemainingArgs.Count -gt 0) {
-    Write-Log "Ignore appears to contain fragmented path tokens (no explicit -Ignore flag); reclassifying as path fragments" "DEBUG"
-    $ignoreExplicitlySpecified = $false
+if ($ignoreExplicitlySpecified -and -not $invocationHasIgnoreFlag -and $Ignore.Count -gt 0) {
+    $ignoreContainsPathFragments = @($Ignore | Where-Object { $_ -match '[\\/]' -or $_ -match '^[A-Za-z]:' }).Count -gt 0
+    if ($ignoreContainsPathFragments) {
+        Write-Log "Ignore appears to contain path fragments (no explicit -Ignore flag); reclassifying as path fragments" "DEBUG"
+        $ignoreExplicitlySpecified = $false
+    }
+}
+
+if ($archiveExplicitlySpecified -and -not $invocationHasArchiveFlag -and $Archive -and $Archive -ne $defaultArchivePath) {
+    $archiveLooksLikeSimpleToken = $Archive -match '^[^\\/:]+$'
+    $likelyBindingCorruption = $conflictIsPathFragment -or
+        $RemainingArgs.Count -gt 0 -or
+        (@($Ignore | Where-Object { $_ -match '[\\/]' -or $_ -match '^[A-Za-z]:' }).Count -gt 0)
+
+    if ($archiveLooksLikeSimpleToken -and $likelyBindingCorruption) {
+        Write-Log "Archive appears to contain a path fragment (no explicit -Archive flag); reclassifying as path fragment" "DEBUG"
+        $archiveExplicitlySpecified = $false
+    }
 }
 
 if ($ignoreExplicitlySpecified -and $Ignore.Count -gt 0 -and $RemainingArgs.Count -gt 0) {
@@ -209,6 +231,11 @@ if ($ignoreExplicitlySpecified -and $Ignore.Count -gt 0 -and $RemainingArgs.Coun
         $RemainingArgs = @($RemainingArgs | Select-Object -Skip 1)
     }
     $Ignore += $ignoreContinuations
+}
+
+if ($archiveExplicitlySpecified -and $Archive -and $Archive -match ',') {
+    Write-Log "Archive contains comma-separated fragments; reclassifying as path fragments" "DEBUG"
+    $archiveExplicitlySpecified = $false
 }
 
 if ($EdenExport) {
@@ -223,13 +250,18 @@ if ($EdenExport) {
 # Collect all potential path fragments from Path, ConflictResolution, and RemainingArgs
 $allFragments = @()
 if ($Path) { $allFragments += $Path }
-if ($conflictIsPathFragment) { $allFragments += $ConflictResolution }
-if ($RemainingArgs) { $allFragments += $RemainingArgs }
+if (-not $archiveExplicitlySpecified -and $Archive -and $Archive -ne $defaultArchivePath) {
+    Write-Log "Archive was not explicitly specified; treating Archive value as path fragment: $Archive" "DEBUG"
+    $allFragments += $Archive
+    $Archive = $defaultArchivePath
+}
 if (-not $ignoreExplicitlySpecified -and $Ignore.Count -gt 0) {
     Write-Log "Ignore rules were not explicitly specified; treating Ignore values as path fragments: $($Ignore -join ' | ')" "DEBUG"
     $allFragments += $Ignore
     $Ignore = @()
 }
+if ($conflictIsPathFragment) { $allFragments += $ConflictResolution }
+if ($RemainingArgs) { $allFragments += $RemainingArgs }
 
 Write-Log "All parameter fragments: $($allFragments -join ' | ')" "DEBUG"
 
