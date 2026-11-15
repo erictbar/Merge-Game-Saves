@@ -23,6 +23,9 @@ pwsh.exe -ExecutionPolicy Bypass -File "C:\Path\To\MergeGames.ps1" -Path "\\<IP1
 - The `-Archive` parameter specifies the folder where merged saves will be archived.
 - The optional `-Ignore` parameter excludes all files beneath a named directory (for example, `Unity`), files with an extension (for example, `.log`), or an exact file name (for example, `Player-prev.log`). Ignored files are not synchronized, archived, or included in Eden packages.
 - The optional `--Eden` arguments create `Game Name_yyyyMMdd_HHmmss.zip` with contents laid out as `0100b280106a0000/<merged save contents>` for import into Eden on Android.
+- `-RegistryAction Export` writes the selected `HKCU` key to `-RegistryRelativePath` beneath `-RegistryLocalPath` before the normal file merge. Use this in Playnite's post-launch script.
+- `-RegistryAction Import` imports the merged `.reg` file after synchronization. Use this in Playnite's pre-launch script.
+- `-RegistryKey` only permits keys under `HKEY_CURRENT_USER`/`HKCU`; the default backup location is `Registry\OPUS.reg`. `-RegistryLocalPath` defaults to the first `-Path`, which should be the local PC's save directory.
 
 ### Example
 
@@ -40,7 +43,7 @@ You can configure Playnite to run this script automatically before and after lau
 3. Add the following command to the **Pre-Script** and/or **Post-Script** fields:
 
    ```powershell
-   pwsh.exe -ExecutionPolicy Bypass -File "C:\Path\To\MergeGames.ps1" -Path "\\<IP1>\<Location of Save Data>","\\<IP2>\<Location of Save Data>" -Archive "C:\Path\To\Archive\Folder" --Eden "0100b280106a0000" "Y:\Backup\Saves\Emulators\Eden\Game Name"
+   pwsh.exe -ExecutionPolicy Bypass -File "C:\Path\To\MergeGames.ps1" -Path "C:\Local\Saves","\\<IP2>\<Location of Save Data>" -Archive "C:\Path\To\Archive\Folder" -RegistryAction Import -RegistryKey "HKCU\Software\SIGONO\OPUS" -RegistryLocalPath "C:\Local\Saves"
    ```
 
 4. Adjust the paths and parameters as needed for your setup.
