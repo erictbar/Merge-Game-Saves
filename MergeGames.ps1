@@ -13,6 +13,15 @@ param(
 
     [string]$ConflictResolution = "Newest", # Newest, Largest, Manual
 
+    [ValidateSet("None", "Export", "Import")]
+    [string]$RegistryAction = "None",
+
+    [string]$RegistryKey,
+
+    [string]$RegistryRelativePath = "Registry\OPUS.reg",
+
+    [string]$RegistryLocalPath,
+
     [switch]$Help,
     
     [Parameter(ValueFromRemainingArguments=$true)]
@@ -36,6 +45,10 @@ if ($Help) {
     Write-Host "  -DryRun                   Show what would be done without making changes"
     Write-Host "  -ShowDetails              Show detailed logging"
     Write-Host "  -ConflictResolution       How to resolve conflicts: Newest, Largest, Manual (default: Newest)"
+    Write-Host "  -RegistryAction           Registry phase: Export, Import, or None (default: None)"
+    Write-Host "  -RegistryKey              HKCU registry key to export/import (for example HKCU\Software\SIGONO\OPUS)"
+    Write-Host "  -RegistryRelativePath     Registry backup path relative to the local save path (default: Registry\OPUS.reg)"
+    Write-Host "  -RegistryLocalPath        Local save path containing the registry backup (default: first -Path)"
     Write-Host "  -Help                     Show this help message"
     Write-Host ""
     Write-Host "Examples:"
@@ -455,6 +468,79 @@ function Get-FileInventory {
     }
 }
 
+# Normalize and validate a registry key before passing it to reg.exe.
+function Get-UserRegistryKey {
+    param([string]$Key)
+
+    if (-not $Key) {
+        throw "RegistryKey is required when RegistryAction is '$RegistryAction'."
+    }
+
+    $normalizedKey = $Key.Trim().TrimEnd('\') -replace '^HKEY_CURRENT_USER\\', 'HKCU\'
+    if ($normalizedKey -notmatch '^HKCU\\.+') {
+        throw "Only HKEY_CURRENT_USER (HKCU) registry keys are supported."
+    }
+
+    return $normalizedKey
+}
+
+function Get-RegistrySnapshotPath {
+    param(
+        [string]$RootPath,
+        [string]$RelativePath
+    )
+
+    if (-not $RelativePath -or [System.IO.Path]::IsPathRooted($RelativePath) -or
+        $RelativePath -match '(^|[\\/])\.\.([\\/]|$)') {
+        throw "RegistryRelativePath must be a non-rooted path beneath the local save path."
+    }
+
+    return Join-Path $RootPath $RelativePath
+}
+
+function Invoke-RegistryAction {
+    param(
+        [ValidateSet("Export", "Import")]
+        [string]$Action,
+        [string]$Key,
+        [string]$SnapshotPath
+    )
+
+    if ($DryRun) {
+        Write-Log "[DRY RUN] Would $($Action.ToLower()) registry key $Key using $SnapshotPath" "INFO"
+        return
+    }
+
+    $regCommand = Join-Path $env:SystemRoot "System32\reg.exe"
+    if (-not (Test-Path -LiteralPath $regCommand)) {
+        throw "Could not find reg.exe at $regCommand."
+    }
+
+    $snapshotDirectory = Split-Path -Path $SnapshotPath -Parent
+    if ($Action -eq "Export") {
+        if (-not (Test-Path -LiteralPath $snapshotDirectory)) {
+            New-Item -ItemType Directory -Path $snapshotDirectory -Force -ErrorAction Stop | Out-Null
+        }
+
+        $regOutput = & $regCommand export $Key $SnapshotPath /y 2>&1
+    } else {
+        if (-not (Test-Path -LiteralPath $SnapshotPath)) {
+            throw "Registry backup does not exist: $SnapshotPath"
+        }
+
+        $regOutput = & $regCommand import $SnapshotPath 2>&1
+    }
+
+    $regExitCode = $LASTEXITCODE
+    $regOutput | ForEach-Object { Write-Host $_ }
+
+    if ($regExitCode -ne 0) {
+        throw "reg.exe $Action failed for $Key with exit code $regExitCode."
+    }
+
+    Write-Log "Registry $Action completed: $Key -> $SnapshotPath" "SUCCESS"
+}
+
 # Function to calculate file hash
 function Get-FileHashQuick {
     param([string]$FilePath)
@@ -865,6 +951,11 @@ try {
         Write-Log "Ignore rules: $($Ignore -join ', ')" "INFO"
     }
     Write-Log "Conflict Resolution: $ConflictResolution" "INFO"
+    if ($RegistryAction -ne "None") {
+        Write-Log "Registry action: $RegistryAction" "INFO"
+        Write-Log "Registry key: $RegistryKey" "INFO"
+        Write-Log "Registry backup: $RegistryRelativePath" "INFO"
+    }
     if ($EdenExport) {
         Write-Log "Eden export: $($EdenExport.TitleId) -> $(Get-EdenZipPath -OutputPath $EdenExport.OutputPath)" "INFO"
     }
@@ -890,6 +981,20 @@ try {
         Write-Log "Found $($accessiblePaths.Count) accessible paths for synchronization" "SUCCESS"
     }
     
+    if ($RegistryAction -ne "None") {
+        $userRegistryKey = Get-UserRegistryKey -Key $RegistryKey
+        $registryRootPath = if ($RegistryLocalPath) { $RegistryLocalPath } else { $accessiblePaths[0] }
+
+        if ($accessiblePaths -notcontains $registryRootPath) {
+            throw "RegistryLocalPath must match one of the accessible -Path values."
+        }
+
+        $registrySnapshotPath = Get-RegistrySnapshotPath -RootPath $registryRootPath -RelativePath $RegistryRelativePath
+        if ($RegistryAction -eq "Export") {
+            Invoke-RegistryAction -Action Export -Key $userRegistryKey -SnapshotPath $registrySnapshotPath
+        }
+    }
+
     # Create file inventories
     Write-Log "Scanning files in all locations..." "INFO"
     $inventories = @()
@@ -921,6 +1026,10 @@ try {
     Invoke-SyncActions -SyncActions $syncActions
     } else {
         Write-Log "Skipping synchronization (only one accessible path). Backup created successfully." "WARN"
+    }
+
+    if ($RegistryAction -eq "Import") {
+        Invoke-RegistryAction -Action Import -Key $userRegistryKey -SnapshotPath $registrySnapshotPath
     }
 
     $edenPackagePath = $null
