@@ -1,16 +1,20 @@
 # MergeGames.ps1 - Sync game save files across multiple PCs with backup
+[CmdletBinding(PositionalBinding=$false)]
 param(
-    [Parameter(Mandatory=$true, ValueFromRemainingArguments=$false)]
+    [Parameter(Mandatory=$true, Position=0, ValueFromRemainingArguments=$false)]
     [string[]]$Path,
 
+    [Parameter(Position=1)]
     [string]$Archive = "$env:USERPROFILE\Documents\GameSaves\Archive",
 
+    [Parameter(Position=2)]
     [string[]]$Ignore = @(),
 
     [switch]$DryRun,
 
     [switch]$ShowDetails,
 
+    [Parameter(Position=3)]
     [string]$ConflictResolution = "Newest", # Newest, Largest, Manual
 
     [ValidateSet("None", "Export", "Import")]
