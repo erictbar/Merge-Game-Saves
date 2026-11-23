@@ -27,6 +27,9 @@ param(
     [string]$RegistryLocalPath,
 
     [switch]$Help,
+
+    [Parameter(ValueFromRemainingArguments=$false)]
+    [string[]]$Eden,
     
     [Parameter(ValueFromRemainingArguments=$true)]
     [string[]]$RemainingArgs
@@ -217,9 +220,51 @@ if ($ConflictResolution -and $ConflictResolution -notin $validConflictResolution
     $conflictIsPathFragment = $true
 }
 
-$extendedArgs = Parse-ExtendedArguments -Arguments $RemainingArgs -FallbackEdenPath $(if ($conflictIsPathFragment) { $ConflictResolution } else { $null })
-$RemainingArgs = $extendedArgs.UnhandledArgs
+$extendedArgumentInput = @($RemainingArgs)
+$remainingArgumentsAfterEden = @()
+$edenDestinationPath = $null
+$edenArgumentIndex = -1
+for ($i = 0; $i -lt $rawCommandLineArgs.Count; $i++) {
+    if ($rawCommandLineArgs[$i] -ieq "--Eden" -or $rawCommandLineArgs[$i] -ieq "-Eden") {
+        $edenArgumentIndex = $i
+        break
+    }
+}
+$edenRemainingIndex = -1
+for ($i = $RemainingArgs.Count - 1; $i -ge 0; $i--) {
+    if (Test-IsPathLike $RemainingArgs[$i]) {
+        $edenRemainingIndex = $i
+        break
+    }
+}
+
+if ($edenArgumentIndex -ge 0 -and $edenRemainingIndex -ge 0) {
+    $edenDestinationPath = $RemainingArgs[$edenRemainingIndex].Trim().Trim('"').Trim("'")
+    $remainingWithoutEdenDestination = @(
+        for ($i = 0; $i -lt $RemainingArgs.Count; $i++) {
+            if ($i -ne $edenRemainingIndex) {
+                $RemainingArgs[$i]
+            }
+        }
+    )
+    $extendedArgumentInput = @("--Eden", $rawCommandLineArgs[$edenArgumentIndex + 1], $edenDestinationPath)
+    $remainingArgumentsAfterEden = $remainingWithoutEdenDestination
+} elseif ($edenArgumentIndex -ge 0 -and $edenArgumentIndex + 2 -lt $rawCommandLineArgs.Count) {
+    $edenDestinationPath = $rawCommandLineArgs[$edenArgumentIndex + 2].Trim().Trim('"').Trim("'")
+    $extendedArgumentInput = @("--Eden", $rawCommandLineArgs[$edenArgumentIndex + 1], $edenDestinationPath) + $extendedArgumentInput
+} elseif ($Eden) {
+    $extendedArgumentInput = @("--Eden") + @($Eden) + $extendedArgumentInput
+}
+
+$extendedArgs = Parse-ExtendedArguments -Arguments $extendedArgumentInput -FallbackEdenPath $(if ($conflictIsPathFragment) { $ConflictResolution } else { $null })
+$RemainingArgs = @($extendedArgs.UnhandledArgs) + $remainingArgumentsAfterEden
 $EdenExport = $extendedArgs.Eden
+
+if ($edenDestinationPath) {
+    $Ignore = @($Ignore | Where-Object {
+        $_.Trim().Trim('"').Trim("'") -ne $edenDestinationPath
+    })
+}
 
 if ($ignoreExplicitlySpecified -and -not $invocationHasIgnoreFlag -and $Ignore.Count -gt 0) {
     $ignoreContainsPathFragments = @($Ignore | Where-Object { $_ -match '[\\/]' -or $_ -match '^[A-Za-z]:' }).Count -gt 0
